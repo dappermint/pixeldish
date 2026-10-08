@@ -1,0 +1,6 @@
+# check code: one long linear script per mode, and a crash is a failed check
+disabled_rules:
+  - force_unwrapping
+  - function_body_length
+  - function_parameter_count
+  - cyclomatic_complexity

@@ -1,0 +1,13 @@
+opt_in_rules:
+  - force_unwrapping
+
+excluded:
+  - build
+  # one-off icon generator; still formatted, not worth linting
+  - tools
+
+disabled_rules:
+  # w, h, u, r, px mirror the metal source, longer names read worse next to it
+  - identifier_name
+  # Uniforms.pal mirrors a fixed-size array in the metal struct, it has to be a tuple
+  - large_tuple
