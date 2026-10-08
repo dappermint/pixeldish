@@ -25,9 +25,19 @@ than the noise offset: it also picks scale, spiral direction and drift.
 
 ## Install
 
-Grab the dmg from [Releases](../../releases) and drag Pixeldish to
-Applications. The build is ad-hoc signed and not notarized, so the first launch
-needs right-click, then Open.
+```sh
+brew tap dappermint/tap
+brew trust --cask dappermint/tap/pixeldish
+brew install --cask pixeldish
+```
+
+`brew trust` is needed once, because Homebrew won't load a cask from a
+third-party tap until you trust it. Update with `brew upgrade --cask pixeldish`,
+remove with `brew uninstall --zap --cask pixeldish` (also deletes prefs).
+
+Or grab the dmg from [Releases](../../releases) and drag Pixeldish to
+Applications. It is ad-hoc signed and not notarized, so the first launch needs
+right-click, then Open.
 
 Or build it yourself (below) and run `just install`.
 
