@@ -4,7 +4,7 @@ Dithered procedural wallpapers for macOS. A small native menu bar app written
 in Swift and Metal. It has no dock icon and no dependencies.
 
 <p>
-  <img src="assets/cells.gif" width="49%" alt="Cells shape, Bayer 8 dither, Dracula palette, animated">
+  <img src="assets/cells.gif" width="49%" alt="Cells shape, Bayer 8 dither, Iris palette, animated">
   <img src="assets/circuit.gif" width="49%" alt="Circuit shape, Bayer 8 dither, Dracula palette, animated">
 </p>
 
