@@ -1,6 +1,9 @@
 import ServiceManagement
 import SwiftUI
 
+// every row's control column, so sliders and segmented pickers share both edges
+private let kControlWidth: CGFloat = 230
+
 struct EditorView: View {
     @AppStorage("shape") var shape = 0
     @AppStorage("dither") var dither = 3
@@ -34,11 +37,8 @@ struct EditorView: View {
     var onExport: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Pixeldish").font(.system(size: 20, weight: .semibold))
-                Text("dithered wallpapers, live").font(.caption).foregroundStyle(.secondary)
-
+        Form {
+            Section {
                 Picker("Shape", selection: $shape) {
                     ForEach(0 ..< kShapeNames.count, id: \.self) { Text(kShapeNames[$0]).tag($0) }
                 }
@@ -48,58 +48,65 @@ struct EditorView: View {
                 Picker("Palette", selection: $palette) {
                     ForEach(0 ..< kPalettes.count, id: \.self) { Text(kPalettes[$0].0).tag($0) }
                 }
-
-                HStack {
-                    Text("Custom").font(.caption)
-                    Spacer()
-                    ForEach(0 ..< 5, id: \.self) { i in
-                        ColorPicker("Custom colour \(i + 1)", selection: customColor(i), supportsOpacity: false)
-                            .labelsHidden()
+                LabeledContent("Custom") {
+                    HStack(spacing: 6) {
+                        ForEach(0 ..< 5, id: \.self) { i in
+                            ColorPicker("Custom colour \(i + 1)", selection: customColor(i), supportsOpacity: false)
+                                .labelsHidden()
+                        }
                     }
                 }
-                sliderInt("Colours", $colors, 2 ... 5)
-                slider("Pixel size", $pixelSize, "pixelSize", step: 1, fmt: "%.0f")
-                slider("Warp", $warp, "warp", fmt: "%.2f")
-                slider("Contrast", $contrast, "contrast", fmt: "%.2f")
-                slider("Grain", $grain, "grain", fmt: "%.3f")
-                slider("Vignette", $vignette, "vignette", fmt: "%.2f")
-                slider("Zoom", $zoom, "zoom", fmt: "%.2f")
-                slider("Spread", $spread, "spread", fmt: "%.2f")
-                slider("Speed", $speed, "speed", fmt: "%.2f")
+                Button("Palette from photo...", action: onPalettePhoto)
+            }
 
-                HStack {
-                    Toggle("Animate", isOn: $animate)
-                    Toggle("Invert", isOn: $invert)
-                    Toggle("Hyper", isOn: $hyper)
-                        .help("demo mode: draw at the display's top refresh rate, 120 Hz on ProMotion")
-                }
+            Section("Tuning") {
+                segmented("Colours", $colors, 2 ... 5)
+                segmented("Pixel size", Binding(
+                    get: { Int(min(max(pixelSize, 1), 6)) },
+                    set: { pixelSize = Double($0) }
+                ), 1 ... 6)
+                slider("Warp", $warp, "warp")
+                slider("Contrast", $contrast, "contrast")
+                slider("Grain", $grain, "grain")
+                slider("Vignette", $vignette, "vignette")
+                slider("Zoom", $zoom, "zoom")
+                slider("Spread", $spread, "spread")
+                slider("Speed", $speed, "speed")
+            }
+
+            Section("Behaviour") {
+                Toggle("Animate", isOn: $animate)
+                Toggle("Invert", isOn: $invert)
+                Toggle("Hyper", isOn: $hyper)
+                    .help("demo mode: draw at the display's top refresh rate, 120 Hz on ProMotion")
                 Toggle("Shuffle every hour", isOn: $autoShuffle)
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
                         try? (on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister())
                     }
+            }
+
+            Section {
                 HStack {
                     Button("Shuffle", action: onShuffle)
                     Button("Reseed", action: onReseed)
                     Button("Previous", action: onPrevious)
                 }
-                Text(String(format: "seed %.3f", seed)).font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary).textSelection(.enabled)
+                LabeledContent("Seed", value: String(format: "%.3f", seed))
+                    .monospacedDigit().textSelection(.enabled)
                 HStack {
                     Button("Use a photo", action: onPhoto)
                     Button("Still frame", action: onStill)
                     Button("Export PNG", action: onExport)
                 }
-                Button("Palette from photo...", action: onPalettePhoto)
                 if isPhoto {
                     Button("Back to generators") { isPhoto = false }
                 }
+            }
 
-                Divider()
-                HStack {
-                    Text("Saved").font(.headline)
-                    Spacer()
-                    Button("Save look", action: onSave)
+            Section {
+                if savedLooks(savedData).isEmpty {
+                    Text("No saved looks yet").foregroundStyle(.secondary)
                 }
                 ForEach(Array(savedLooks(savedData).enumerated()), id: \.offset) { i, look in
                     HStack {
@@ -115,10 +122,16 @@ struct EditorView: View {
                         .accessibilityLabel("Delete saved look")
                     }
                 }
+            } header: {
+                HStack {
+                    Text("Saved")
+                    Spacer()
+                    Button("Save look", action: onSave)
+                }
             }
-            .padding(20)
         }
-        .frame(width: 340, height: 720)
+        .formStyle(.grouped)
+        .frame(width: 440, height: 760)
     }
 
     // ponytail: wells read UserDefaults directly, so a palette-from-photo made while
@@ -139,42 +152,29 @@ struct EditorView: View {
         )
     }
 
-    func sliderInt(_ label: String, _ v: Binding<Int>, _ r: ClosedRange<Int>) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(label).font(.caption)
-                Spacer()
-                Text("\(v.wrappedValue)").font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+    // reads through the clamp so a value stored by an older, wider range shows what renders
+    func segmented(_ label: String, _ v: Binding<Int>, _ r: ClosedRange<Int>) -> some View {
+        LabeledContent(label) {
+            Picker(label, selection: v) {
+                ForEach(r, id: \.self) { Text("\($0)").tag($0) }
             }
-            Slider(
-                value: Binding(
-                    get: { Double(v.wrappedValue) },
-                    set: { v.wrappedValue = Int($0.rounded()) }
-                ),
-                in: Double(r.lowerBound) ... Double(r.upperBound), step: 1
-            )
+            .pickerStyle(.segmented).labelsHidden().fixedSize().frame(width: kControlWidth, alignment: .trailing)
         }
     }
 
-    // reads through the clamp so a value stored by an older, wider range shows what renders
-    func slider(
-        _ label: String, _ raw: Binding<Double>, _ key: String,
-        step: Double? = nil, fmt: String
-    ) -> some View {
+    func slider(_ label: String, _ raw: Binding<Double>, _ key: String) -> some View {
         guard let r = kRanges[key] else { preconditionFailure("no slider range for \(key)") }
         let v = Binding(
             get: { min(max(raw.wrappedValue, r.lowerBound), r.upperBound) },
             set: { raw.wrappedValue = $0 }
         )
-        return VStack(alignment: .leading, spacing: 2) {
+        return LabeledContent(label) {
             HStack {
-                Text(label).font(.caption)
-                Spacer()
-                Text(String(format: fmt, v.wrappedValue)).font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                Slider(value: v, in: r).labelsHidden()
+                Text(String(format: "%.2f", v.wrappedValue)).monospacedDigit()
+                    .foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
             }
-            if let step { Slider(value: v, in: r, step: step) } else { Slider(value: v, in: r) }
+            .frame(width: kControlWidth)
         }
     }
 }
