@@ -17,6 +17,7 @@ struct EditorView: View {
     @AppStorage("animate") var animate = true
     @AppStorage("invert") var invert = false
     @AppStorage("hyper") var hyper = false
+    @AppStorage("autoShuffle") var autoShuffle = false
     @AppStorage("isPhoto") var isPhoto = false
     @AppStorage("launchAtLogin") var launchAtLogin = false
     @AppStorage("seed") var seed = 0.0
@@ -72,6 +73,7 @@ struct EditorView: View {
                     Toggle("Hyper", isOn: $hyper)
                         .help("demo mode: draw at the display's top refresh rate, 120 Hz on ProMotion")
                 }
+                Toggle("Shuffle every hour", isOn: $autoShuffle)
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
                         try? (on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister())

@@ -20,6 +20,7 @@ in Swift and Metal. It has no dock icon and no dependencies.
   build it from a photo
 - stops drawing when a display is fully covered, holds the frame in Low Power
   Mode
+- shuffle every hour
 - hyper: demo mode that draws at the display's top refresh rate (120 Hz on
   ProMotion)
 - live animated desktop layer on every display, or a still frame
@@ -61,8 +62,8 @@ Click the grid icon in the menu bar:
 | Quit | ⌘Q |
 
 The editor has every knob: shape, dither, palette, colour count, pixel size,
-warp, contrast, grain, vignette, zoom, spread, speed, invert, animate and
-hyper.
+warp, contrast, grain, vignette, zoom, spread, speed, invert, animate, hyper
+and hourly shuffle.
 
 ## Building
 

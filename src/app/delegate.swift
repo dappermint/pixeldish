@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var status: NSStatusItem?
     var editor: NSWindow?
     var tick: Timer?
+    var lastShuffle = Date()
     var history: [[String: Any]] = []
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -29,6 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let on = Pref.d.bool(forKey: "animate")
             if on != !wall.paused { wall.setPaused(!on) }
             wall.tick(live: live, hyper: Pref.d.bool(forKey: "hyper"))
+            // ponytail: fixed hour, counted from launch or the last shuffle; a picker if anyone wants daily
+            if Pref.d.bool(forKey: "autoShuffle"), Date().timeIntervalSince(lastShuffle) > 3_600 { shuffle() }
         }
         wall.setPaused(!Pref.d.bool(forKey: "animate"))
         wall.refresh()
@@ -102,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func shuffle() {
+        lastShuffle = Date()
         pushHistory()
         let d = Pref.d
         d.set(Int.random(in: 0 ..< kShapeNames.count), forKey: "shape")
