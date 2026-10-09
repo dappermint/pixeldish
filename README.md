@@ -4,17 +4,24 @@ Dithered procedural wallpapers for macOS. A small native menu bar app written
 in Swift and Metal. It has no dock icon and no dependencies.
 
 <p>
-  <img src="assets/cells.gif" width="49%" alt="Cells shape, Bayer 8 dither, Iris palette, animated">
+  <img src="assets/cells.gif" width="49%" alt="Voronoi shape, Bayer 8 dither, Iris palette, animated">
   <img src="assets/circuit.gif" width="49%" alt="Circuit shape, Bayer 8 dither, Dracula palette, animated">
 </p>
 
 ## Features
 
-- 15 shape generators: flow, mesh, plasma, ripple, aurora, cells, topo, whorl,
-  sonar, mosh, weave, belts, circuit, julia, kali
-- 10 dither algorithms
+- 15 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
+  vortex, sweep, glitch, twill, belts, circuit, julia, kali
+- 13 dithers: smooth, poster, bayer 2/4/8/16, R2 (plastic-constant
+  quasirandom), interleaved gradient noise, halftone, lines, diamond, ascii,
+  benday
 - 20 palettes (Dracula Pro, Van Helsing, Catppuccin Mocha/Latte, Nord, Gruvbox,
-  Tokyo Night, Rose Pine and more), plus one built from any photo
+  Tokyo Night, Rose Pine and more), plus a custom one: pick five colours or
+  build it from a photo
+- stops drawing when a display is fully covered, holds the frame in Low Power
+  Mode
+- hyper: demo mode that draws at the display's top refresh rate (120 Hz on
+  ProMotion)
 - live animated desktop layer on every display, or a still frame
 - use a photo as the source image
 - export a PNG for each display
@@ -54,7 +61,8 @@ Click the grid icon in the menu bar:
 | Quit | ⌘Q |
 
 The editor has every knob: shape, dither, palette, colour count, pixel size,
-warp, contrast, grain, vignette, zoom, spread, speed, invert and animate.
+warp, contrast, grain, vignette, zoom, spread, speed, invert, animate and
+hyper.
 
 ## Building
 

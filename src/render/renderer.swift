@@ -5,13 +5,14 @@ import MetalKit
 import UniformTypeIdentifiers
 
 let kShapeNames = [
-    "Flow", "Mesh", "Plasma", "Ripple", "Aurora", "Cells",
-    "Topo", "Whorl", "Sonar", "Mosh", "Weave", "Belts", "Circuit",
+    "Drift", "Shepard", "Sines", "Fringe", "Curtain", "Voronoi",
+    "Contour", "Vortex", "Sweep", "Glitch", "Twill", "Belts", "Circuit",
     "Julia", "Kali"
 ]
 let kDitherNames = [
     "Smooth", "Poster", "Bayer 4", "Bayer 8", "Noise",
-    "Halftone", "Lines", "Diamond", "ASCII", "Benday"
+    "Halftone", "Lines", "Diamond", "ASCII", "Benday",
+    "Bayer 2", "Bayer 16", "R2"
 ]
 
 struct Uniforms {

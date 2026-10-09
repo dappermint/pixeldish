@@ -160,7 +160,7 @@ func runAudit() -> Bool {
 
     let dusk = kPalettes[1].1
 
-    print("\n=== palette levels reachable per dither (5 colours, shape Flow) ===")
+    print("\n=== palette levels reachable per dither (5 colours, shape Drift) ===")
     for d in kDitherNames.indices {
         let a = analyse(
             render(
@@ -169,7 +169,7 @@ func runAudit() -> Bool {
             ), dusk, colors: 5
         )
         let used = a.hits.filter { $0 > 0 }.count
-        if used < 3 { problems.append("\(kDitherNames[d]): only \(used)/5 levels on Flow") }
+        if used < 3 { problems.append("\(kDitherNames[d]): only \(used)/5 levels on Drift") }
         print(
             String(
                 format: "  %-9@ %d/5  %@", kDitherNames[d] as NSString, used,
@@ -211,7 +211,7 @@ func runAudit() -> Bool {
             ))
     }
 
-    print("\n=== settings sanity at the slider limits (shape Flow, Bayer8) ===")
+    print("\n=== settings sanity at the slider limits (shape Drift, Bayer8) ===")
     let grainMax = Float(kRanges["grain"]!.upperBound), vigMax = Float(kRanges["vignette"]!.upperBound)
     let cases: [(String, Float, Float, Bool, Float)] = [
         ("defaults", 0.05, 0.35, false, 1.0),

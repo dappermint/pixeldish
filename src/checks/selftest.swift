@@ -29,7 +29,7 @@ func runSelftest() -> Bool {
     }
 
     check("shape names", kShapeNames.count == 15)
-    check("dither names", kDitherNames.count == 10)
+    check("dither names", kDitherNames.count == 13)
     check("palettes >= 20", kPalettes.count >= 20)
     let d0 = Pref.d.object(forKey: "contrast")
     Pref.d.set(2.5, forKey: "contrast")
@@ -96,6 +96,23 @@ func runSelftest() -> Bool {
     } else {
         check("photo palette generates", false)
     }
+
+    let c0 = Pref.d.object(forKey: "customPalette"), n0 = kPalettes.count
+    PhotoPalette.save([
+        SIMD3(1, 1, 1),
+        SIMD3(0, 0, 0),
+        SIMD3(0.5, 0.5, 0.5),
+        SIMD3(0.2, 0.2, 0.2),
+        SIMD3(0.8, 0.8, 0.8)
+    ])
+    let custom = kPalettes.last
+    check("custom palette appended", custom?.0 == "Custom")
+    check(
+        "custom palette sorted dark to light",
+        custom.map { p in (0 ..< 4).allSatisfy { p.1[$0].x < p.1[$0 + 1].x } } == true
+    )
+    if let c0 { Pref.d.set(c0, forKey: "customPalette") } else { Pref.d.removeObject(forKey: "customPalette") }
+    if n0 < kPalettes.count { kPalettes.removeLast() }
 
     if fails == 0 { print("selftest OK (\(ran) checks)") }
     return fails == 0

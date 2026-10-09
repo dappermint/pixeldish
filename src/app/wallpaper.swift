@@ -57,6 +57,23 @@ final class WallpaperController {
         }
     }
 
+    // normally the 20 Hz app timer asks for each frame; hyper hands the view its
+    // own display link at the panel's top rate. Either way a window the system
+    // reports fully covered (fullscreen app, other Space) stops drawing
+    func tick(live: Bool, hyper: Bool) {
+        for (v, w) in zip(views, windows) {
+            let run = live && w.occlusionState.contains(.visible)
+            let fps = hyper ? (w.screen?.maximumFramesPerSecond ?? 120) : 20
+            if v.preferredFramesPerSecond != fps { v.preferredFramesPerSecond = fps }
+            let selfDriven = run && hyper
+            if v.isPaused == selfDriven {
+                v.isPaused = !selfDriven
+                v.enableSetNeedsDisplay = !selfDriven
+            }
+            if run, !hyper { v.setNeedsDisplay(v.bounds) }
+        }
+    }
+
     // one redraw, for when a setting changed while the wallpaper is frozen
     func refresh() {
         for v in views {

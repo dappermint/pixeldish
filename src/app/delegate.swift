@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let on = Pref.d.bool(forKey: "animate")
             if on != !wall.paused { wall.setPaused(!on) }
-            if on { wall.refresh() }
+            wall.tick(live: live, hyper: Pref.d.bool(forKey: "hyper"))
         }
         wall.setPaused(!Pref.d.bool(forKey: "animate"))
         wall.refresh()
@@ -37,9 +37,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            if !Pref.d.bool(forKey: "animate") { wall.refresh() }
+            if !live { wall.refresh() }
         }
     }
+
+    // Low Power Mode holds the current frame; settings still redraw it
+    var live: Bool { Pref.d.bool(forKey: "animate") && !ProcessInfo.processInfo.isLowPowerModeEnabled }
 
     func buildStatusItem() {
         let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

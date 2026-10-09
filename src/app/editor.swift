@@ -16,6 +16,7 @@ struct EditorView: View {
     @AppStorage("spread") var spread = 0.0
     @AppStorage("animate") var animate = true
     @AppStorage("invert") var invert = false
+    @AppStorage("hyper") var hyper = false
     @AppStorage("isPhoto") var isPhoto = false
     @AppStorage("launchAtLogin") var launchAtLogin = false
     @AppStorage("seed") var seed = 0.0
@@ -47,6 +48,14 @@ struct EditorView: View {
                     ForEach(0 ..< kPalettes.count, id: \.self) { Text(kPalettes[$0].0).tag($0) }
                 }
 
+                HStack {
+                    Text("Custom").font(.caption)
+                    Spacer()
+                    ForEach(0 ..< 5, id: \.self) { i in
+                        ColorPicker("Custom colour \(i + 1)", selection: customColor(i), supportsOpacity: false)
+                            .labelsHidden()
+                    }
+                }
                 sliderInt("Colours", $colors, 2 ... 5)
                 slider("Pixel size", $pixelSize, "pixelSize", step: 1, fmt: "%.0f")
                 slider("Warp", $warp, "warp", fmt: "%.2f")
@@ -60,6 +69,8 @@ struct EditorView: View {
                 HStack {
                     Toggle("Animate", isOn: $animate)
                     Toggle("Invert", isOn: $invert)
+                    Toggle("Hyper", isOn: $hyper)
+                        .help("demo mode: draw at the display's top refresh rate, 120 Hz on ProMotion")
                 }
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
@@ -106,6 +117,24 @@ struct EditorView: View {
             .padding(20)
         }
         .frame(width: 340, height: 720)
+    }
+
+    // ponytail: wells read UserDefaults directly, so a palette-from-photo made while
+    // Custom is already selected shows after the editor reopens; observe it if that bites
+    func customColor(_ i: Int) -> Binding<Color> {
+        let seed = { PhotoPalette.stored() ?? kPalettes[min(max(palette, 0), kPalettes.count - 1)].1 }
+        return Binding(
+            get: { let c = seed()[i]
+                return Color(.sRGB, red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+            },
+            set: { color in
+                guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
+                var pal = seed()
+                pal[i] = SIMD3(Float(c.redComponent), Float(c.greenComponent), Float(c.blueComponent))
+                PhotoPalette.save(pal)
+                palette = kPalettes.count - 1
+            }
+        )
     }
 
     func sliderInt(_ label: String, _ v: Binding<Int>, _ r: ClosedRange<Int>) -> some View {

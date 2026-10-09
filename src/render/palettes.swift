@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import simd
 
-// var, not let: PhotoPalette appends one generated "Photo" entry at runtime.
+// var, not let: PhotoPalette appends one user-made "Custom" entry at runtime.
 var kPalettes: [(String, [SIMD3<Float>])] = [
     (
         "Ember",
@@ -196,17 +196,21 @@ enum PhotoPalette {
 
     static let d = UserDefaults.standard
 
+    static func stored() -> [SIMD3<Float>]? {
+        guard let f = d.array(forKey: "customPalette") as? [Double], f.count == 15 else { return nil }
+        let v = f.map { Float($0) }
+        return (0 ..< 5).map { i -> SIMD3<Float> in SIMD3(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]) }
+    }
+
+    // the editor's wells can be filled in any order; every dither assumes a
+    // dark-to-light ramp, so the rendered palette is sorted by luminance
     static func apply() {
-        guard let flat = d.array(forKey: "customPalette") as? [Double], flat.count == 15 else { return }
-        var pal = [SIMD3<Float>]()
-        for i in 0 ..< 5 {
-            let r = Float(flat[i * 3]), g = Float(flat[i * 3 + 1]), b = Float(flat[i * 3 + 2])
-            pal.append(SIMD3(r, g, b))
-        }
-        if kPalettes.last?.0 == "Photo" {
-            kPalettes[kPalettes.count - 1] = ("Photo", pal)
+        let lum = { (c: SIMD3<Float>) in 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z }
+        guard let pal = stored()?.sorted(by: { lum($0) < lum($1) }) else { return }
+        if kPalettes.last?.0 == "Custom" {
+            kPalettes[kPalettes.count - 1] = ("Custom", pal)
         } else {
-            kPalettes.append(("Photo", pal))
+            kPalettes.append(("Custom", pal))
         }
     }
 }

@@ -47,7 +47,7 @@ if let i = args.firstIndex(of: "--sheet") {
 }
 
 #if AUDIT
-// no Pref.register: a saved Photo palette is the user's data, not a shipped palette to gate on
+// no Pref.register: a saved Custom palette is the user's data, not a shipped palette to gate on
 if args.contains("--audit") { exit(runAudit() ? 0 : 1) }
 #endif
 if args.contains("--selftest") { exit(runSelftest() ? 0 : 1) }

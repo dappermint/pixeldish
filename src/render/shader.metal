@@ -60,12 +60,12 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
     float2x2 drift = rot(k.z * 6.2831853);
 
     switch (shape) {
-    case 0: {   // flow: domain-warped fbm, the noise pushed along its own gradient
+    case 0: {   // drift: domain-warped fbm, the noise pushed along its own gradient
         float2 p = g + uv * 1.2 + drift * loop(6.0, time * 0.15);
         float2 q = float2(fbm3(p), fbm3(p + float2(5.2, 1.3)));
         return saturate((fbm5(p + (warp * 2.5 + 0.5) * q) - 0.5) * 1.8 + 0.5);
     }
-    case 1: {   // mesh: four drifting colour stops blended like a gradient mesh
+    case 1: {   // shepard: four drifting colour stops blended like a gradient mesh
         float2 w = (float2(fbm3(g + uv), fbm3(g + uv + 7.1)) - 0.5) * warp;
         float num = 0.0, den = 0.0;
         for (int i = 0; i < 4; ++i) {
@@ -78,14 +78,14 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         }
         return num / den;
     }
-    case 2: {   // plasma: demoscene sine sum
+    case 2: {   // sines: demoscene sine sum
         float2 p = g + uv * mix(3.0, 5.0, k.x);
         float2 c = p + 2.0 * float2(sin(time * 0.3), cos(time * 0.4));
         float v = sin(p.x + time) + sin(p.y * 1.7 - time * 1.4)
                 + sin((p.x + p.y) * 0.6 + time * 0.5) + sin(length(c) * 1.5 - time);
         return 0.5 + 0.18 * v + (fbm3(p * 0.5) - 0.5) * warp;
     }
-    case 3: {   // ripple: three point sources interfering
+    case 3: {   // fringe: three point sources interfering
         float2 p = uv + (float2(fbm3(g + uv * 1.5), fbm3(g + uv * 1.5 + 3.3)) - 0.5) * warp * 0.5;
         float v = 0.0;
         for (int i = 0; i < 3; ++i) {
@@ -96,7 +96,7 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         }
         return 0.5 + 0.22 * v;
     }
-    case 4: {   // aurora: a wavering curtain with vertical rays, fading upward
+    case 4: {   // curtain: a wavering curtain with vertical rays, fading upward
         float x = uv.x * 1.3 + g.x;
         float bend = fbm3(float2(x * 0.6, time * 0.05 + g.y));
         float dy = uv.y - (bend - 0.5) * 1.2 - 0.1 * sin(x * 2.0 + time * 0.2);
@@ -106,7 +106,7 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         float streak = dy > 0.0 ? 1.0 : rays * rays * 2.2;
         return saturate(fall * (0.35 + 0.9 * rays) * streak + 0.04);
     }
-    case 5: {   // cells: dark network, each cell glowing faintly round its seed
+    case 5: {   // voronoi: dark network, each cell glowing faintly round its seed
         float2 p = g + uv * mix(2.5, 4.0, k.x);
         float2 cell = floor(p), f = fract(p);
         float d0 = 8.0, d1 = 8.0, id = 0.0;
@@ -124,7 +124,7 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         float core = saturate((sqrt(d1) - sqrt(d0)) * (0.6 + 0.9 * warp));
         return core * sqrt(core) * (0.8 + 0.2 * id);
     }
-    case 6: {   // topo: contour map, fixed-width lines over the height
+    case 6: {   // contour: contour map, fixed-width lines over the height
         float2 p = g + uv * 1.3 + drift * loop(5.0, time * 0.05);
         p += (fbm3(p * 2.0) - 0.5) * warp;
         float n = fbmN(p, 4);
@@ -132,7 +132,7 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         float line = 1.0 - saturate(min(fract(x), 1.0 - fract(x)) / (fwidth(x) * 1.2));
         return saturate((n - 0.22) * 1.8) * (1.0 - 0.8 * line);
     }
-    case 7: {   // whorl: marbled stripes wound into a vortex, tighter toward the eye
+    case 7: {   // vortex: marbled stripes wound into a vortex, tighter toward the eye
         float2 p = uv - (fract(g * 0.37) - 0.5) * 0.6;
         float r = length(p);
         float a = hand * ((warp * 5.0 + 1.0) * exp(-r * 1.6) + time * 0.12);
@@ -140,14 +140,14 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         float n = fbm5(s * 1.3 + g);
         return 0.5 + 0.5 * sin(s.x * mix(5.0, 9.0, k.x) + n * 5.0);
     }
-    case 8: {   // sonar: rings rolling out from a ping under a fading radar sweep
+    case 8: {   // sweep: rings rolling out from a ping under a fading radar sweep
         float2 p = uv - (fract(g * 0.53) - 0.5) * 0.7;
         float r = length(p) + (fbm3(p * 1.5 + g) - 0.5) * warp * 0.5;
         float trail = fract((hand * atan2(p.y, p.x) - time * 0.6) * 0.15915494);
         float ring = 0.5 + 0.5 * cos((r * mix(4.5, 8.0, k.x) - time * 0.5) * 6.2831853);
         return saturate(trail * trail * 0.75 + ring * (0.45 - 0.2 * trail));
     }
-    case 9: {   // mosh: macroblocks stuck on stale motion vectors, smeared sideways
+    case 9: {   // glitch: macroblocks stuck on stale motion vectors, smeared sideways
         float beat = floor(time * 1.5);
         float bs = exp2(floor(mix(3.0, 5.0, hash21(floor(uv * 4.0) + beat))));
         float2 blk = floor(uv * bs);
@@ -161,7 +161,7 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         }
         return saturate((fbm5(g + q * 1.4) - 0.5) * 2.0 + 0.5);
     }
-    case 10: {  // weave: 2/2 twill, rounded threads, cloth rippling under warp
+    case 10: {  // twill: 2/2 twill, rounded threads, cloth rippling under warp
         float2 p = g + uv * mix(7.0, 12.0, k.x) + drift * loop(3.0, time * 0.3);
         p += warp * 0.6 * float2(sin(p.y * 0.35 + time * 0.3), sin(p.x * 0.3 + time * 0.25));
         float2 cell = floor(p);
@@ -317,6 +317,13 @@ static float3 shade(int dither, float field, float2 uv, float pixelSize, float c
     case 5: { float2 d = cuv - 0.5; phi = 1.0 - 2.0 * dot(d, d); break; }
     case 6: phi = 1.0 - abs(cuv.y - 0.5) * 2.0; break;
     case 7: phi = 1.0 - (abs(cuv.x - 0.5) + abs(cuv.y - 0.5)); break;
+    // bayer 2 and 16: the same recursion as 4 and 8, one level shallower or deeper
+    case 10: phi = bayer2(cell) + 0.125; break;
+    case 11: phi = bayer2(cell) + 0.001953125
+                + 0.25 * (bayer2(cell * 0.5) + 0.25 * (bayer2(cell * 0.25) + 0.25 * bayer2(cell * 0.125))); break;
+    // R2: lattice from the plastic constant (1/g, 1/g^2), the lowest-discrepancy 2D sequence
+    // known, so noise-like thresholds without the clumps of hashed noise
+    case 12: phi = fract(0.5 + dot(cell, float2(0.75487767, 0.56984029))); break;
     default: phi = -1.0; break;
     }
 
@@ -351,7 +358,7 @@ fragment float4 fmain(float4 pos [[position]],
         field = fieldOf(int(u.look.x), centered, u.misc.x, u.tune.x, u.misc.z);
     }
     // contrast, then spread: several shapes only reach the middle of the range
-    // (Flow covers 0.21..0.83), so without this the end palette entries never
+    // (Drift covers 0.21..0.83), so without this the end palette entries never
     // appear. spread=0 leaves the field alone, which some shapes want
     field = saturate((field - 0.5) * u.tune.y + 0.5);
     if (u.misc.w > 0.0) field = saturate((field - u.misc.w) / max(1.0 - 2.0 * u.misc.w, 0.01));
