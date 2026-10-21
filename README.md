@@ -46,7 +46,7 @@ brew install --cask pixeldish
 
 `brew trust` is needed once, because Homebrew won't load a cask from a
 third-party tap until you trust it. Update with `brew upgrade --cask pixeldish`,
-remove with `brew uninstall --zap --cask pixeldish` (also deletes prefs).
+remove with `brew uninstall --zap --cask pixeldish` (also deletes prefs, the screen saver and the synced wallpaper stills).
 
 Or grab the dmg from [Releases](../../releases) and drag Pixeldish to
 Applications. It is ad-hoc signed and not notarized, so the first launch needs

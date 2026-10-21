@@ -308,5 +308,11 @@ extension AppDelegate {
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         try? fm.removeItem(at: dst)
         try? fm.copyItem(at: src, to: dst)
+        // copyItem keeps the quarantine a brew/dmg install put on the app, and
+        // the screen saver host won't load a quarantined ad-hoc bundle
+        let paths = [dst.path] + (fm.subpaths(atPath: dst.path) ?? []).map { dst.path + "/" + $0 }
+        for p in paths {
+            removexattr(p, "com.apple.quarantine", XATTR_NOFOLLOW)
+        }
     }
 }
