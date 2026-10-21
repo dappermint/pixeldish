@@ -2,14 +2,16 @@ import Foundation
 
 enum Pref {
     static let d = UserDefaults.standard
+    static let base: [String: Any] = [
+        "shape": 0, "dither": 3, "palette": 1, "pixelSize": 3.0, "colors": 5,
+        "warp": 0.5, "contrast": 1.0, "grain": 0.05, "vignette": 0.35,
+        "speed": 0.35, "zoom": 1.0, "spread": 0.0, "animate": true,
+        "invert": false, "launchAtLogin": false, "hyper": false,
+        "autoShuffle": false
+    ]
+
     static func register() {
-        d.register(defaults: [
-            "shape": 0, "dither": 3, "palette": 1, "pixelSize": 3.0, "colors": 5,
-            "warp": 0.5, "contrast": 1.0, "grain": 0.05, "vignette": 0.35,
-            "speed": 0.35, "zoom": 1.0, "spread": 0.0, "animate": true,
-            "invert": false, "launchAtLogin": false, "hyper": false,
-            "autoShuffle": false
-        ])
+        d.register(defaults: base)
         PhotoPalette.apply()
         if d.object(forKey: "seed") == nil { d.set(timeSeed(), forKey: "seed") }
     }

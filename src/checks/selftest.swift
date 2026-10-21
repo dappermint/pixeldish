@@ -15,6 +15,9 @@ func runSelftest() -> Bool {
     let r = DishRenderer(shader: kShaderPath)
     check("renderer builds (device, shader, pipeline)", r != nil)
     check("atlas builds", r?.atlas != nil)
+    if Bundle.main.bundlePath.hasSuffix(".app") {
+        check("screen saver bundled", Bundle.main.url(forResource: "Pixeldish", withExtension: "saver") != nil)
+    }
     // render every shape x dither offscreen and prove the pixels actually vary;
     // a broken generator silently returns one flat colour and looks like a bug in the palette
     if let r {

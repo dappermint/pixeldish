@@ -10,18 +10,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var tick: Timer?
     var lastShuffle = Date()
     var history: [[String: Any]] = []
+    var syncWork: DispatchWorkItem?
+    var lastSync = ""
 
     func applicationDidFinishLaunching(_ n: Notification) {
         Pref.register()
         history = (Pref.d.array(forKey: "history") as? [[String: Any]]) ?? []
         NSApp.setActivationPolicy(.accessory)
         buildStatusItem()
+        installSaver()
         wall.rebuild()
+        scheduleDesktopSync()
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
             self?.wall.rebuild()
+            self?.lastSync = ""
+            self?.scheduleDesktopSync()
         }
         // one timer drives every display so they stay in step, and a still
         // wallpaper costs nothing because nothing redraws until a setting changes
@@ -41,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             guard let self else { return }
             if !live { wall.refresh() }
+            scheduleDesktopSync()
         }
     }
 
@@ -240,5 +247,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if firstOut == nil { firstOut = out }
         }
         if !save, let firstOut { NSWorkspace.shared.open(firstOut) }
+    }
+}
+
+extension AppDelegate {
+    // the system wallpaper is what Mission Control, the lock screen and a quit
+    // app show, so it gets a still of the current look. Sliders write defaults
+    // every tick, hence the debounce
+    func scheduleDesktopSync() {
+        syncWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.syncDesktop() }
+        syncWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: w)
+    }
+
+    func syncDesktop() {
+        let photo = wall.renderers.first?.photo.map { "\(ObjectIdentifier($0 as AnyObject))" } ?? ""
+        let key = "\(makeUniforms(w: 1, h: 1, time: 0))\(photo)"
+        guard key != lastSync,
+              let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+              .appendingPathComponent("Pixeldish")
+        else { return }
+        lastSync = key
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // the wallpaper store ignores a URL it already shows, so alternate two names per display
+        let slot = Pref.d.bool(forKey: "desktopSlot")
+        Pref.d.set(!slot, forKey: "desktopSlot")
+        for (screen, (r, v)) in zip(wall.screens, zip(wall.renderers, wall.views)) {
+            let w = Int(v.drawableSize.width), h = Int(v.drawableSize.height)
+            let sw = Int(screen.frame.width * screen.backingScaleFactor)
+            let sh = Int(screen.frame.height * screen.backingScaleFactor)
+            // the window is oversized past the screen edges, crop back to what is visible
+            guard w >= sw, h >= sh,
+                  let px = r.render(makeUniforms(w: w, h: h, time: 0), w: w, h: h),
+                  let img = cgImage(px, w: w, h: h)?
+                  .cropping(to: CGRect(x: (w - sw) / 2, y: (h - sh) / 2, width: sw, height: sh))
+            else { continue }
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int ?? 0
+            let url = dir.appendingPathComponent("desktop-\(id)-\(slot ? "a" : "b").png")
+            guard writePNG(img, to: url) else { continue }
+            // ponytail: only the current Space per display; other Spaces catch up on a later sync
+            try? NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
+        }
+    }
+
+    // the screen saver ships inside the app and is copied over whenever the
+    // bundled build differs, so updating the app updates the saver too
+    func installSaver() {
+        guard let src = Bundle.main.url(forResource: "Pixeldish", withExtension: "saver") else { return }
+        let fm = FileManager.default
+        let dir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Screen Savers")
+        let dst = dir.appendingPathComponent("Pixeldish.saver")
+        let bin = "Contents/MacOS/PixeldishSaver"
+        if fm.contentsEqual(
+            atPath: src.appendingPathComponent(bin).path,
+            andPath: dst.appendingPathComponent(bin).path
+        ) {
+            return
+        }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? fm.removeItem(at: dst)
+        try? fm.copyItem(at: src, to: dst)
     }
 }

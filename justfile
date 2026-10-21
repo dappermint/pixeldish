@@ -15,6 +15,15 @@ build:
     cp src/render/shader.metal "{{APP}}/Contents/Resources/"
     cp Info.plist "{{APP}}/Contents/"
     if [ -f build/AppIcon.icns ]; then cp build/AppIcon.icns "{{APP}}/Contents/Resources/"; fi
+    # the screen saver ships inside the app, which installs it on launch; signed
+    # first because signing the app seals it as a resource
+    SAVER="{{APP}}/Contents/Resources/Pixeldish.saver"
+    rm -rf "$SAVER" && mkdir -p "$SAVER/Contents/MacOS" "$SAVER/Contents/Resources"
+    {{SWIFTC}} -O -emit-library -module-name PixeldishSaver -o "$SAVER/Contents/MacOS/PixeldishSaver" \
+        saver/view.swift src/app/prefs.swift $(find src/render -name "*.swift")
+    cp src/render/shader.metal "$SAVER/Contents/Resources/"
+    cp saver/Info.plist "$SAVER/Contents/"
+    codesign -s - -f "$SAVER"
     codesign -s - -f "{{APP}}"
     echo "built {{APP}}"
 

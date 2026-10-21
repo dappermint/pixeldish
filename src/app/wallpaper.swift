@@ -8,6 +8,7 @@ final class WallpaperWindow: NSWindow {
 
 final class WallpaperController {
     var windows: [NSWindow] = []
+    var screens: [NSScreen] = []
     var views: [MTKView] = []
     var renderers: [DishRenderer] = []
 
@@ -16,6 +17,7 @@ final class WallpaperController {
             w.orderOut(nil)
         }
         windows = []
+        screens = []
         views = []
         renderers = []
         for screen in NSScreen.screens {
@@ -44,6 +46,7 @@ final class WallpaperController {
             w.setFrame(screen.frame.insetBy(dx: -80, dy: -80), display: true)
             w.orderFrontRegardless()
             windows.append(w)
+            screens.append(screen)
             views.append(v)
             renderers.append(r)
         }

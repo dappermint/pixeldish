@@ -27,6 +27,11 @@ in Swift and Metal. It has no dock icon and no dependencies.
 - use a photo as the source image
 - export a PNG for each display
 - saved looks, history, launch at login
+- keeps the system wallpaper in step: Mission Control, the lock screen and the
+  desktop after quitting show a still of the current look
+- screen saver: the app installs Pixeldish.saver into `~/Library/Screen Savers`
+  on launch; pick it in System Settings > Screen Saver to get the current look
+  when idle and on lock
 
 Each shuffle or reseed takes a new seed from the clock. The seed changes more
 than the noise offset: it also picks scale, spiral direction and drift.
