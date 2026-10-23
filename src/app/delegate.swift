@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var syncWork: DispatchWorkItem?
     var lastSync = ""
     var ticks = 0
+    var lastStill = Date()
 
     func applicationDidFinishLaunching(_ n: Notification) {
         Pref.register()
@@ -43,6 +44,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // ponytail: polls both config files every 2s; a stat is cheaper than watching a symlink chain nix swaps
             ticks += 1
             if ticks % 40 == 0 { Config.poll() }
+            // ponytail: the system wallpaper (menu bar tint, Mission Control, lock screen) follows
+            // the animation once a minute; finer means a full-screen PNG write every few seconds.
+            // wall clock, not ticks: macOS throttles the timer when the app is napped
+            if live, Date().timeIntervalSince(lastStill) > 60 {
+                lastSync = ""
+                syncDesktop()
+            }
         }
         wall.setPaused(!Pref.d.bool(forKey: "animate"))
         wall.refresh()
@@ -235,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var firstOut: URL?
         for (i, (r, v)) in zip(wall.renderers, wall.views).enumerated() {
             let w = Int(v.drawableSize.width), h = Int(v.drawableSize.height)
-            guard let px = r.render(makeUniforms(w: w, h: h, time: 0), w: w, h: h),
+            guard let px = r.render(makeUniforms(w: w, h: h, time: r.now), w: w, h: h),
                   let img = cgImage(px, w: w, h: h)
             else { continue }
             let out =
@@ -270,6 +278,7 @@ extension AppDelegate {
               .appendingPathComponent("Pixeldish")
         else { return }
         lastSync = key
+        lastStill = Date()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // the wallpaper store ignores a URL it already shows, so alternate two names per display
         let slot = Pref.d.bool(forKey: "desktopSlot")
@@ -280,7 +289,7 @@ extension AppDelegate {
             let sh = Int(screen.frame.height * screen.backingScaleFactor)
             // the window is oversized past the screen edges, crop back to what is visible
             guard w >= sw, h >= sh,
-                  let px = r.render(makeUniforms(w: w, h: h, time: 0), w: w, h: h),
+                  let px = r.render(makeUniforms(w: w, h: h, time: r.now), w: w, h: h),
                   let img = cgImage(px, w: w, h: h)?
                   .cropping(to: CGRect(x: (w - sw) / 2, y: (h - sh) / 2, width: sw, height: sh))
             else { continue }

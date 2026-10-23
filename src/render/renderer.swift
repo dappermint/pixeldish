@@ -166,6 +166,8 @@ final class DishRenderer: NSObject, MTKViewDelegate {
     // `just test-live` to prove the window path draws, since the display itself
     // cannot be screenshotted without screen-recording permission
     var probeFrames = 0
+    // the clock the live view draws at; stills use it too so they match the screen
+    var now: Float { paused ? 0 : Float(Date().timeIntervalSince(start)) * prefValue("speed") }
 
     init?(shader path: String) {
         guard let dev = MTLCreateSystemDefaultDevice(),
@@ -258,9 +260,8 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         else { return }
         rp.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
-        let t = paused ? 0 : Float(Date().timeIntervalSince(start)) * prefValue("speed")
         let size = view.drawableSize
-        encode(enc, makeUniforms(w: Int(size.width), h: Int(size.height), time: t))
+        encode(enc, makeUniforms(w: Int(size.width), h: Int(size.height), time: now))
         if probeFrames > 0 {
             probeFrames -= 1
             cb.present(rt)
