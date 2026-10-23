@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import Metal
 
 func runSelftest() -> Bool {
     Pref.register()
@@ -31,7 +32,12 @@ func runSelftest() -> Bool {
         }
     }
 
-    check("shape names", kShapeNames.count == 15)
+    check("shape names", kShapeNames.count == 19)
+    if let r {
+        for (name, ok) in kerrChecks(r.device) {
+            check(name, ok)
+        }
+    }
     check("dither names", kDitherNames.count == 13)
     check("palettes >= 20", kPalettes.count >= 20)
     let d0 = Pref.d.object(forKey: "contrast")
@@ -119,4 +125,79 @@ func runSelftest() -> Bool {
 
     if fails == 0 { print("selftest OK (\(ran) checks)") }
     return fails == 0
+}
+
+// the Kerr tracer against Bardeen's analytic shadow edge: rays 2% inside must fall
+// in, 2% outside must escape, and the disk side turning toward us must be
+// blueshifted. Runs the shader's own kerrRay through an extra kernel, not a copy
+func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
+    let probe = """
+    kernel void probe(device const float4 *q [[buffer(0)]], device float2 *o [[buffer(1)]],
+                      uint i [[thread_position_in_grid]]) {
+        float4 p = q[2 * i], d = q[2 * i + 1];
+        Ray h = kerrRay(p.x, p.y, p.zw, d.x, d.y);
+        o[i] = float2(h.kind, h.kind == 1 ? diskShift(h.r, h.lam, p.x) : 0.0);
+    }
+    """
+    guard let src = try? String(contentsOfFile: kShaderPath, encoding: .utf8),
+          let fn = (try? dev.makeLibrary(source: src + probe, options: nil))?.makeFunction(name: "probe"),
+          let ps = try? dev.makeComputePipelineState(function: fn)
+    else { return [("kerr probe builds", false)] }
+
+    // spherical photon orbits of radius r land on the shadow edge at (alpha, beta)
+    func edge(_ a: Double, _ inc: Double) -> [SIMD2<Double>] {
+        if a ==
+            0 {
+            return (0 ..< 24).map { SIMD2(cos(Double($0) * .pi / 12), sin(Double($0) * .pi / 12)) * 27.0.squareRoot() }
+        }
+        return stride(from: 1.01, through: 4.5, by: 0.01).flatMap { r -> [SIMD2<Double>] in
+            let lam = -(r * r * r - 3 * r * r + a * a * r + a * a) / (a * (r - 1))
+            let eta = -r * r * r * (r * r * r - 6 * r * r + 9 * r - 4 * a * a) / (a * a * (r - 1) * (r - 1))
+            let b2 = eta + a * a * cos(inc) * cos(inc) - lam * lam / (tan(inc) * tan(inc))
+            return b2 > 0 ? [SIMD2(-lam / sin(inc), b2.squareRoot()), SIMD2(-lam / sin(inc), -b2.squareRoot())] : []
+        }
+    }
+    var rays: [SIMD4<Float>] = []
+    var groups: [(String, Range<Int>, (SIMD2<Float>) -> Bool)] = []
+    func group(_ name: String, _ qs: [SIMD4<Float>], disk: SIMD2<Float>, _ ok: @escaping (SIMD2<Float>) -> Bool) {
+        let lo = rays.count / 2
+        for q in qs {
+            rays += [q, SIMD4(disk.x, disk.y, 0, 0)]
+        }
+        groups.append((name, lo ..< rays.count / 2, ok))
+    }
+    for a in [0.0, 0.9, 0.998] {
+        for deg in [60.0, 85.0] {
+            let inc = deg * .pi / 180, pts = edge(a, inc)
+            for (side, s, kind) in [("inside", 0.98, 0), ("outside", 1.02, 2)] {
+                let qs = pts.map { SIMD4(Float(a), Float(inc), Float($0.x * s), Float($0.y * s)) }
+                group("kerr a=\(a) i=\(Int(deg)) \(side) shadow edge", qs, disk: .zero) { Int($0.x) == kind }
+            }
+        }
+    }
+    let i80 = Float(80 * Double.pi / 180)
+    group("kerr approaching disk side blueshifted", [SIMD4(0.9, i80, -10, -1)], disk: SIMD2(3, 30)) {
+        $0.x == 1 && $0.y > 1
+    }
+    group("kerr receding disk side redshifted", [SIMD4(0.9, i80, 10, -1)], disk: SIMD2(3, 30)) { $0.x == 1 && $0.y < 1 }
+
+    let n = rays.count / 2
+    guard let qb = dev.makeBuffer(bytes: rays, length: rays.count * MemoryLayout<SIMD4<Float>>.stride),
+          let ob = dev.makeBuffer(length: n * MemoryLayout<SIMD2<Float>>.stride),
+          let cb = dev.makeCommandQueue()?.makeCommandBuffer(),
+          let enc = cb.makeComputeCommandEncoder()
+    else { return [("kerr probe runs", false)] }
+    enc.setComputePipelineState(ps)
+    enc.setBuffer(qb, offset: 0, index: 0)
+    enc.setBuffer(ob, offset: 0, index: 1)
+    // one thread per group: uniform dispatch works on CI's paravirtual GPU too
+    enc.dispatchThreadgroups(
+        MTLSize(width: n, height: 1, depth: 1),
+        threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+    )
+    enc.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+    let out = ob.contents().bindMemory(to: SIMD2<Float>.self, capacity: n)
+    return groups.map { g in (g.0, !g.1.isEmpty && g.1.allSatisfy { g.2(out[$0]) }) }
 }

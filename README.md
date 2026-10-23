@@ -10,8 +10,13 @@ in Swift and Metal. It has no dock icon and no dependencies.
 
 ## Features
 
-- 15 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
-  vortex, sweep, glitch, twill, belts, circuit, julia, kali
+- 19 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
+  vortex, sweep, glitch, twill, belts, circuit, julia, kali, torus, kerr, binary,
+  cygnus
+- kerr ray traces a Kerr null geodesic per pixel (warp is the spin, 0 is
+  Schwarzschild) onto a Page-Thorne disk with g^4 beaming; the selftest checks
+  the shadow against Bardeen's analytic edge. binary superposes two
+  Schwarzschild lenses, cygnus is a hole fed by a Roche-lobe-filling supergiant
 - 13 dithers: smooth, poster, bayer 2/4/8/16, R2 (plastic-constant
   quasirandom), interleaved gradient noise, halftone, lines, diamond, ascii,
   benday

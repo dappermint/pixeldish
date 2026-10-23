@@ -47,6 +47,124 @@ static inline float sstep(float x) { float c = saturate(x); return c * c * (3.0 
 static inline float bayer2(float2 a) { a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
 static inline float2x2 rot(float a) { float c = cos(a), s = sin(a); return float2x2(c, s, -s, c); }
 
+// ---------------------------------------------------------------- black holes
+// geometric units of the hole's mass, G = c = M = 1
+
+static float iscoR(float a) {
+    float z1 = 1.0 + pow(1.0 - a * a, 1.0 / 3.0) * (pow(1.0 + a, 1.0 / 3.0) + pow(1.0 - a, 1.0 / 3.0));
+    float z2 = sqrt(3.0 * a * a + z1 * z1);
+    return 3.0 + z2 - sqrt((3.0 - z1) * (3.0 + z1 + 2.0 * z2));
+}
+
+// Page-Thorne thin disk flux up to a constant: zero at the ISCO, r^-3 far out
+static float ptFlux(float r, float a) {
+    a = max(a, 1e-3);   // the x2 term is 0/0 at a = 0, its limit is 0
+    float x = sqrt(r), x0 = sqrt(iscoR(a)), c = acos(a) / 3.0;
+    float3 xr = 2.0 * float3(cos(c - M_PI_F / 3.0), cos(c + M_PI_F / 3.0), -cos(c));
+    float s = x - x0 - 1.5 * a * log(x / x0);
+    for (int i = 0; i < 3; ++i) {
+        float xi = xr[i], xj = xr[(i + 1) % 3], xk = xr[(i + 2) % 3];
+        s -= 3.0 * (xi - a) * (xi - a) / (xi * (xi - xj) * (xi - xk)) * log((x - xi) / (x0 - xi));
+    }
+    return max(s, 0.0) / (r * r * (x * x * x - 3.0 * x + 2.0 * a));
+}
+
+// redshift of a photon with angular momentum lam leaving a prograde circular orbit
+static float diskShift(float r, float lam, float a) {
+    float s = sqrt(r), om = 1.0 / (r * s + a);
+    float ut = (r * s + a) / sqrt(r * s * max(r * s - 3.0 * s + 2.0 * a, 1e-4));
+    return 1.0 / (ut * (1.0 - om * lam));
+}
+
+// observed disk brightness, flux times g^4, streaked by gas shearing with the
+// Keplerian flow. Two layers crossfade on a cycle so the shear never winds the
+// pattern into stripes finer than a pixel
+static float diskLight(float r, float lam, float phi, float a, float time, float2 g) {
+    float om = 1.0 / (r * sqrt(r) + a), c = time * 0.07, n = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        float f = fract(c + 0.5 * float(i)), ang = phi - om * f * 110.0;
+        n += (1.0 - abs(2.0 * f - 1.0))
+           * fbm3(g + r * float2(cos(ang), sin(ang)) * 0.7 + floor(c + 0.5 * float(i)) * 13.1);
+    }
+    float e = pow(diskShift(r, lam, a), 4.0) * ptFlux(r, a) / ptFlux(1.36 * iscoR(a), a);
+    // flux falls as r^-3, so a gamma keeps the outer disk on screen
+    return 1.0 - exp(-2.0 * pow(e * (0.4 + 1.2 * n), 0.45));
+}
+
+static float sky(float3 d, float2 g) {
+    float neb = fbm3(g + d.xy * 2.5 + d.z * float2(1.9, -1.3));
+    float3 c = d * 80.0;
+    float h = hash21(floor(c).xy + floor(c).z * 17.31 + g);
+    float star = h > 0.96 ? (h - 0.96) * 25.0 * saturate(1.0 - 2.5 * length(fract(c) - 0.5)) : 0.0;
+    return 0.02 + 0.2 * sstep((neb - 0.35) * 2.5) + star;
+}
+
+struct Ray { int kind; float r, phi, lam; float3 dir; };   // kind: 0 fell in, 1 hit the disk, 2 escaped
+
+// a Kerr null geodesic traced back from a distant observer at inclination inc
+// through Bardeen's image plane point ab. In Mino time r and theta decouple, so
+// velocity Verlet steps each like a 1D particle: u = 1/r obeys u'' = U'(u)/2 for
+// a polynomial U, and starts at exactly 0, so there is no far-field cut. The sky
+// direction n moves as n'' = -w2 n - a^2 ((1 + 2z^2) n.xy, 2z^3), which is
+// mu'' = Theta'(mu)/2 with the lam / sin^2 term folded in, plus frame dragging
+// turning it about the spin axis. Unlike phi it has no pole to blow up at
+static Ray kerrRay(float a, float inc, float2 ab, float rin, float rout) {
+    float lam = -ab.x * sin(inc);
+    float q = ab.y * ab.y + (ab.x * ab.x - a * a) * cos(inc) * cos(inc);
+    float kk = (lam - a) * (lam - a) + q, w2 = q + lam * lam - a * a, aq = a * a * q;
+    float uh = 1.0 / (1.01 * (1.0 + sqrt(max(1.0 - a * a, 0.0))));
+    Ray o = {0, 0.0, 0.0, lam, float3(0.0)};
+    // forward in time the photon leaves for infinity at u' = -1; we step backward
+    float u = 0.0, vu = -1.0;
+    float3 n = float3(sin(inc), 0.0, cos(inc));
+    float3 vn = -(ab.x * float3(0.0, 1.0, 0.0) + ab.y * float3(-cos(inc), 0.0, sin(inc)));
+    float h = -0.12 / (sqrt(max(w2, 0.0)) + 2.0);
+    for (int i = 0; i < 320; ++i) {
+        float vu2 = vu + 0.5 * h * (u * (-w2 + u * (3.0 * kk - 2.0 * aq * u)));
+        float3 vn2 = vn - 0.5 * h * (w2 * n + a * a * float3((1.0 + 2.0 * n.z * n.z) * n.xy, 2.0 * n.z * n.z * n.z));
+        float un = u + h * vu2, um = 0.5 * (u + un);
+        float3 nn = normalize(n + h * vn2);
+        float2x2 drag = rot(h * a * um * (2.0 - a * lam * um) / (1.0 - 2.0 * um + a * a * um * um));
+        nn.xy = drag * nn.xy;
+        vn2.xy = drag * vn2.xy;
+        vu = vu2 + 0.5 * h * (un * (-w2 + un * (3.0 * kk - 2.0 * aq * un)));
+        vn = vn2 - 0.5 * h * (w2 * nn + a * a * float3((1.0 + 2.0 * nn.z * nn.z) * nn.xy, 2.0 * nn.z * nn.z * nn.z));
+        vn -= dot(vn, nn) * nn;
+        if (n.z * nn.z < 0.0) {
+            float f = n.z / (n.z - nn.z), rc = 1.0 / max(mix(u, un, f), 1e-6);
+            float3 c = mix(n, nn, f);
+            if (rc > rin && rc < rout) { o.kind = 1; o.r = rc; o.phi = atan2(c.y, c.x); return o; }
+        }
+        u = un;
+        n = nn;
+        if (u > uh) return o;
+        if (u < 0.0) { o.kind = 2; o.dir = n; return o; }
+    }
+    return o;   // still circling the photon sphere: as good as fallen in
+}
+
+// the central pull that makes a marched ray trace a Schwarzschild null geodesic
+// exactly: with h = |d x v| the orbit obeys u'' + u = 3 m u^2, whatever the speed
+static float3 bend(float3 d, float3 v, float m) {
+    float r2 = dot(d, d);
+    float3 h = cross(d, v);
+    return -3.0 * m * dot(h, h) * d / (r2 * r2 * sqrt(r2));
+}
+
+// a pinhole camera at inclination inc and azimuth az looking at the origin
+static float3 camRay(float2 uv, float inc, float az, float focal, float hand, thread float3 &o) {
+    o = float3(sin(inc) * cos(az), sin(inc) * sin(az), cos(inc));
+    float3 right = float3(-sin(az), cos(az), 0.0);
+    return normalize(-focal * o + hand * uv.x * right - uv.y * cross(o, right));
+}
+
+static float roche(float3 x, float3 xs, float3 xb, float ms, float om2, thread float3 &grad) {
+    float3 ds = x - xs, db = x - xb;
+    float rs = length(ds), rb = length(db);
+    grad = ms * ds / (rs * rs * rs) + db / (rb * rb * rb) - om2 * float3(x.xy, 0.0);
+    return -ms / rs - 1.0 / rb - 0.5 * om2 * dot(x.xy, x.xy);
+}
+
 // ---------------------------------------------------------------- shapes
 
 static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
@@ -254,6 +372,131 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
             prev = l;
         }
         return saturate((acc - 1.0) * 0.3);
+    }
+    case 15: {  // torus: a neon tube bent into a ring, tumbling, light chasing round it in a helix
+        float3 ro = float3(0.0, 0.0, -2.6), rd = normalize(float3(uv, 1.5));
+        float2x2 ra = rot(time * 0.21 + k.z * 6.2831853), rb = rot(hand * time * 0.13 + k.w * 6.2831853);
+        ro.yz = ra * ro.yz; rd.yz = ra * rd.yz;
+        ro.xy = rb * ro.xy; rd.xy = rb * rd.xy;
+        float tube = mix(0.2, 0.3, k.x), bound = 1.45 + tube;
+        float b = dot(ro, rd), disc = b * b - dot(ro, ro) + bound * bound;
+        if (disc <= 0.0) return 0.0;
+        // the gas glows, the glass is clear: brightness is emission summed along the
+        // ray, in steps that shrink inside the tube where the light is
+        float t = -b - sqrt(disc), end = -b + sqrt(disc), acc = 0.0;
+        for (int i = 0; i < 128 && t < end; ++i) {
+            float3 p = ro + rd * t;
+            float2 q = float2(length(p.xz) - 1.0, p.y);
+            float d = length(q), dt = clamp(0.5 * (d - tube), 0.03, 0.2);
+            float chase = sstep(1.5 * sin(6.0 * atan2(p.z, p.x) + 2.0 * hand * atan2(q.y, q.x) - time * 2.5) + 0.3);
+            acc += (exp(-3.0 * d * d / (tube * tube)) * (0.25 + 0.75 * chase)
+                  + (0.02 + 0.08 * warp) * exp(-6.0 * max(d - tube, 0.0))) * dt;
+            t += dt;
+        }
+        return 1.0 - exp(-5.0 * acc);
+    }
+    case 16: {  // kerr: a spinning hole and its thin disk, ray traced; warp is the spin, 0 is Schwarzschild
+        float a = 0.998 * saturate(warp), inc = mix(1.22, 1.5, k.x);
+        float2 ab = float2(hand * uv.x, -uv.y) * 15.0;
+        Ray h = kerrRay(a, inc, ab, iscoR(a), 20.0);
+        if (h.kind == 1) return diskLight(h.r, h.lam, h.phi, a, time, g) * sstep((20.0 - h.r) / 6.0);
+        if (h.kind == 0) return 0.0;
+        // the observer sits at infinity, so add the parallax a camera 40M out would see
+        float3 up = float3(-cos(inc), 0.0, sin(inc));
+        return sky(normalize(h.dir + (ab.x * float3(0.0, 1.0, 0.0) + ab.y * up) / 40.0), g);
+    }
+    case 17: {  // binary: two holes on a slow orbit with minidisks, lensing the sky and each other
+        // ponytail: lensing superposes two Schwarzschild pulls; the exact two-body
+        // metric needs numerical relativity, not a fragment shader
+        float m2 = mix(0.4, 1.0, warp), sep = 34.0, ang = time * 0.05 + k.w * 6.2831853;
+        float3 c1 = float3(float2(cos(ang), sin(ang)) * sep * m2 / (1.0 + m2), 0.0), c2 = -c1 / m2;
+        // v runs backward along the light, so the photon's angular momentum is -(d x v)
+        float3 o, v = camRay(uv, mix(1.15, 1.45, k.x), 0.0, 2.4, hand, o), x = o * 70.0;
+        for (int i = 0; i < 240; ++i) {
+            float3 d1 = x - c1, d2 = x - c2;
+            float r1 = length(d1), r2 = length(d2);
+            if (r1 < 2.0 || r2 < 2.0 * m2) return 0.0;
+            float dt = max(0.1 * min(r1, r2), 0.05) / length(v);
+            v += (bend(d1, v, 1.0) + bend(d2, v, m2)) * dt;
+            float3 xn = x + v * dt;
+            if (x.z * xn.z < 0.0) {
+                float3 p = mix(x, xn, x.z / (x.z - xn.z));
+                for (int j = 0; j < 2; ++j) {
+                    float m = j == 0 ? 1.0 : m2;
+                    float3 d = p - (j == 0 ? c1 : c2);
+                    float r = length(d) / m;
+                    // minidisks are cut off by the companion's tides near a third of the separation
+                    if (r > 6.0 && r * m < 0.32 * sep * pow(m, 1.0 / 3.0))
+                        return diskLight(r, -cross(d, v).z / m, atan2(d.y, d.x), 0.0, time / m, g);
+                }
+            }
+            x = xn;
+            if (dot(x, x) > 75.0 * 75.0 && dot(x, v) > 0.0) return sky(normalize(v), g);
+        }
+        return 0.0;
+    }
+    case 18: {  // cygnus: a hole on a slow orbit round a supergiant that overflows its Roche lobe
+                // into the hole's disk. Drawn in the frame co-rotating with the orbit, where
+                // the star, stream and disk hold still and the camera circles
+        const float sep = 40.0, ms = 2.0;
+        float om2 = (ms + 1.0) / (sep * sep * sep);
+        float3 xs = float3(-sep / (ms + 1.0), 0.0, 0.0), xb = float3(sep * ms / (ms + 1.0), 0.0, 0.0);
+        // L1: where gravity and the centrifugal pull cancel on the axis, the gradient falls monotonically
+        float lo = xs.x + 1.0, hi = xb.x - 1.0;
+        for (int i = 0; i < 24; ++i) {
+            float m = 0.5 * (lo + hi);
+            if (ms / ((m - xs.x) * (m - xs.x)) - 1.0 / ((xb.x - m) * (xb.x - m)) - om2 * m > 0.0) lo = m; else hi = m;
+        }
+        float3 grad;
+        float l1 = lo, reach = l1 - xs.x, surf = roche(float3(l1, 0.0, 0.0), xs, xb, ms, om2, grad);
+        float spin = sqrt(om2) * 10.0 * time;
+        float3 o, v = camRay(uv, mix(1.1, 1.4, k.x), k.w * 6.2831853 - spin, 4.5, hand, o), x = o * 120.0;
+        float2x2 back = rot(spin);   // escaping rays look up at a sky that does not co-rotate
+        float3 xp = x;
+        for (int i = 0; i < 240; ++i) {
+            float3 d = x - xb;
+            float r = length(d);
+            if (r < 2.0) return 0.0;
+            float ph = roche(x, xs, xb, ms, om2, grad), out = distance(x, xs) - reach;
+            if (out < 0.0 && x.x < l1 && ph < surf) {
+                float3 lo3 = xp, hi3 = x;
+                for (int j = 0; j < 6; ++j) {
+                    float3 m = 0.5 * (lo3 + hi3);
+                    if (roche(m, xs, xb, ms, om2, grad) < surf) hi3 = m; else lo3 = m;
+                }
+                roche(hi3, xs, xb, ms, om2, grad);
+                float gn = length(grad);
+                float limb = 1.0 - 0.6 * (1.0 - abs(dot(grad / gn, normalize(v))));
+                float gran = fbm3(g + float2(hi3.x + hi3.z * 0.7, hi3.y - hi3.z * 0.6) * 0.45 + time * 0.05);
+                // von Zeipel: flux follows surface gravity (0.0075 at the pole), dark at the L1 tip
+                return saturate(0.85 * limb * gn / 0.0075 * (0.75 + 0.5 * gran));
+            }
+            // the potential over its gradient is a first-order distance to the star
+            float ds = out > 0.0 ? out + 0.5 : (x.x < l1 ? 0.8 * (ph - surf) / length(grad) : 0.5);
+            float dt = max(min(0.1 * r, ds), 0.04) / length(v);
+            v += bend(d, v, 1.0) * dt;
+            xp = x;
+            x += v * dt;
+            if (xp.z * x.z < 0.0) {
+                float2 q = mix(xp, x, xp.z / (xp.z - x.z)).xy - xb.xy;
+                float rho = length(q), psi = atan2(q.y, q.x);
+                float2 spot = 10.0 * float2(cos(M_PI_F + 1.4), sin(M_PI_F + 1.4));
+                if (rho > 6.0 && rho < 11.0)
+                    return saturate(diskLight(rho, q.y * v.x - q.x * v.y, psi, 0.0, time, g)
+                                    + 0.6 * exp(-0.3 * dot(q - spot, q - spot)));
+                // the stream leaves L1 and Coriolis swings it ahead of the hole into the rim
+                float s = fract((psi - M_PI_F) / 6.2831853) * 6.2831853 / 1.4;
+                float across = (rho - mix(xb.x - l1, 10.0, sqrt(s))) / (mix(0.5, 1.6, s) * (0.6 + 0.8 * warp));
+                if (s < 1.0 && abs(across) < 1.0)
+                    return saturate((0.3 + 0.35 * s) * (1.0 - across * across)
+                                    * (0.6 + 0.8 * fbm3(g + float2(s * 9.0 - time * 1.2, across))));
+            }
+            if (dot(x, x) > 125.0 * 125.0 && dot(x, v) > 0.0) {
+                float3 e = normalize(v);
+                return sky(float3(back * e.xy, e.z), g);
+            }
+        }
+        return 0.0;
     }
     }
 }
