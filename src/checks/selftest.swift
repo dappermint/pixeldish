@@ -42,6 +42,11 @@ func runSelftest() -> Bool {
         check(name, ok)
     }
     check("dither names", kDitherNames.count == 13)
+    check(
+        "steak icon is a rectangle of known inks",
+        Set(kSteak.map(\.count)).count == 1
+            && kSteak.joined().allSatisfy { $0 == "." || kSteakInk[$0] != nil }
+    )
     check("palettes >= 20", kPalettes.count >= 20)
     let d0 = Pref.d.object(forKey: "contrast")
     Pref.d.set(2.5, forKey: "contrast")

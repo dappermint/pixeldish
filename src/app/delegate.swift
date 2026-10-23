@@ -61,10 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildStatusItem() {
         let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        s.button?.image = NSImage(
-            systemSymbolName: "square.grid.3x3.fill",
-            accessibilityDescription: "Pixeldish"
-        )
+        s.button?.image = steakIcon()
         let m = NSMenu()
         m.addItem(withTitle: "Editor", action: #selector(openEditor), keyEquivalent: "e")
         m.addItem(withTitle: "Shuffle", action: #selector(shuffle), keyEquivalent: "r")
@@ -322,4 +319,48 @@ extension AppDelegate {
             if lstat(p, &st) == 0 { chmod(p, st.st_mode | S_IWUSR) }
         }
     }
+}
+
+// a seared steak on a plate, one point per pixel. In colour, not a template:
+// a monochrome steak reads as bread, a mirror or an eye. The grey rim keeps
+// the white plate visible on a light menu bar
+let kSteak = [
+    ".......gggggg.......",
+    "....ggwwwwwwwwgg....",
+    "..ggwwwwwwwwwwwwgg..",
+    ".ggwwwffffffffwwwgg.",
+    ".gwwffrrdrrrdrffwwg.",
+    "ggwfrrrdrrrdrrrrfwgg",
+    "gwwfrrdrrrdrrrdrowwg",
+    "gwwfrdrrrdrrrdrrowwg",
+    "ggwwfrrrdrrrdrroowgg",
+    ".gwwwoorrrdrrooowwg.",
+    ".ggwwwwooooooowwwgg.",
+    "..ggwwwwwwwwwwwwgg..",
+    "....ggwwwwwwwwgg....",
+    ".......gggggg......."
+]
+
+let kSteakInk: [Character: NSColor] = [
+    "g": NSColor(srgbRed: 0.62, green: 0.64, blue: 0.68, alpha: 1), // plate rim
+    "w": NSColor(srgbRed: 0.96, green: 0.96, blue: 0.95, alpha: 1), // plate
+    "f": NSColor(srgbRed: 0.97, green: 0.86, blue: 0.70, alpha: 1), // fat
+    "r": NSColor(srgbRed: 0.72, green: 0.25, blue: 0.18, alpha: 1), // meat
+    "d": NSColor(srgbRed: 0.33, green: 0.12, blue: 0.08, alpha: 1), // grill marks
+    "o": NSColor(srgbRed: 0.48, green: 0.15, blue: 0.10, alpha: 1) // seared edge
+]
+
+func steakIcon() -> NSImage {
+    let img = NSImage(size: NSSize(width: kSteak[0].count, height: kSteak.count), flipped: true) { _ in
+        for (y, row) in kSteak.enumerated() {
+            for (x, c) in row.enumerated() {
+                guard let ink = kSteakInk[c] else { continue }
+                ink.setFill()
+                NSRect(x: x, y: y, width: 1, height: 1).fill()
+            }
+        }
+        return true
+    }
+    img.accessibilityDescription = "Pixeldish"
+    return img
 }
