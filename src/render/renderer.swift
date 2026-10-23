@@ -15,6 +15,47 @@ let kDitherNames = [
     "Bayer 2", "Bayer 16", "R2"
 ]
 
+struct ShapeParam {
+    let key: String, label: String, range: ClosedRange<Double>, def: Double
+}
+
+// knobs one shape has beyond the shared ones, packed into Uniforms.shp in this
+// order. Keyed by name like the palettes, so appending a shape moves nothing
+let kShapeParams: [String: [ShapeParam]] = [
+    "Torus": [
+        ShapeParam(key: "size", label: "Size", range: 0.5 ... 1.5, def: 1),
+        ShapeParam(key: "thickness", label: "Thickness", range: 0.1 ... 0.45, def: 0.25),
+        ShapeParam(key: "tumble", label: "Tumble", range: 0 ... 3, def: 1),
+        ShapeParam(key: "chase", label: "Chase", range: 0 ... 3, def: 1),
+        ShapeParam(key: "windings", label: "Windings", range: 1 ... 12, def: 6)
+    ],
+    "Kerr": [
+        ShapeParam(key: "spin", label: "Spin", range: 0 ... 0.998, def: 0.9),
+        ShapeParam(key: "inclination", label: "Inclination", range: 5 ... 89, def: 80),
+        ShapeParam(key: "mass", label: "Mass", range: 0.5 ... 2, def: 1),
+        ShapeParam(key: "temperature", label: "Disk temperature", range: 0.5 ... 2, def: 1),
+        ShapeParam(key: "disk", label: "Disk radius", range: 8 ... 30, def: 20)
+    ],
+    "Binary": [
+        ShapeParam(key: "massRatio", label: "Mass ratio", range: 0.1 ... 1, def: 0.7),
+        ShapeParam(key: "separation", label: "Separation", range: 16 ... 50, def: 34),
+        ShapeParam(key: "inclination", label: "Inclination", range: 30 ... 89, def: 75),
+        ShapeParam(key: "orbit", label: "Orbit speed", range: 0 ... 3, def: 1),
+        ShapeParam(key: "temperature", label: "Disk temperature", range: 0.5 ... 2, def: 1)
+    ],
+    "Cygnus": [
+        ShapeParam(key: "starMass", label: "Star mass", range: 1 ... 4, def: 2),
+        ShapeParam(key: "inclination", label: "Inclination", range: 30 ... 89, def: 70),
+        ShapeParam(key: "orbit", label: "Orbit speed", range: 0 ... 3, def: 1),
+        ShapeParam(key: "stream", label: "Stream", range: 0 ... 1, def: 0.5),
+        ShapeParam(key: "temperature", label: "Disk temperature", range: 0.5 ... 2, def: 1)
+    ]
+]
+
+func shapeName(_ i: Int) -> String { kShapeNames[min(max(i, 0), kShapeNames.count - 1)] }
+func shapeParams(_ shape: Int) -> [ShapeParam] { kShapeParams[shapeName(shape)] ?? [] }
+func paramKey(_ shape: Int, _ p: ShapeParam) -> String { "\(shapeName(shape).lowercased()).\(p.key)" }
+
 struct Uniforms {
     var look: SIMD4<Float> = .zero
     var tune: SIMD4<Float> = .zero
@@ -22,6 +63,13 @@ struct Uniforms {
     var view: SIMD4<Float> = .zero
     var pal: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) =
         (.zero, .zero, .zero, .zero, .zero)
+    var shp: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero)
+
+    mutating func setParams(_ shape: Int, _ value: (ShapeParam) -> Double) {
+        var v = shapeParams(shape).map { p in Float(min(max(value(p), p.range.lowerBound), p.range.upperBound)) }
+        v += [Float](repeating: 0, count: 8 - v.count)
+        shp = (SIMD4(v[0], v[1], v[2], v[3]), SIMD4(v[4], v[5], v[6], v[7]))
+    }
 }
 
 // one place that turns prefs into shader uniforms; export and the live layer
@@ -46,6 +94,8 @@ func makeUniforms(w: Int, h: Int, time: Float) -> Uniforms {
         kPalettes[min(max(d.integer(forKey: "palette"), 0), kPalettes.count - 1)].1,
         colors: d.integer(forKey: "colors")
     )
+    let shape = d.integer(forKey: "shape")
+    u.setParams(shape) { d.object(forKey: paramKey(shape, $0)) == nil ? $0.def : d.double(forKey: paramKey(shape, $0)) }
     return u
 }
 
@@ -73,6 +123,7 @@ func comboUniforms(_ shape: Int, _ dither: Int, w: Int, h: Int) -> Uniforms {
     u.misc = SIMD4(2.1, 0, 12.5, 0.12)
     u.view = SIMD4(Float(w), Float(h), 1, 0)
     u.setPalette(kPalettes[1].1, colors: 5)
+    u.setParams(shape) { $0.def }
     return u
 }
 

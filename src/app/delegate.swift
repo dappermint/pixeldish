@@ -12,9 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var history: [[String: Any]] = []
     var syncWork: DispatchWorkItem?
     var lastSync = ""
+    var ticks = 0
 
     func applicationDidFinishLaunching(_ n: Notification) {
         Pref.register()
+        Config.load()
         history = (Pref.d.array(forKey: "history") as? [[String: Any]]) ?? []
         NSApp.setActivationPolicy(.accessory)
         buildStatusItem()
@@ -38,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             wall.tick(live: live, hyper: Pref.d.bool(forKey: "hyper"))
             // ponytail: fixed hour, counted from launch or the last shuffle; a picker if anyone wants daily
             if Pref.d.bool(forKey: "autoShuffle"), Date().timeIntervalSince(lastShuffle) > 3_600 { shuffle() }
+            // ponytail: polls both config files every 2s; a stat is cheaper than watching a symlink chain nix swaps
+            ticks += 1
+            if ticks % 40 == 0 { Config.poll() }
         }
         wall.setPaused(!Pref.d.bool(forKey: "animate"))
         wall.refresh()
@@ -65,6 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.addItem(withTitle: "Shuffle", action: #selector(shuffle), keyEquivalent: "r")
         m.addItem(withTitle: "Previous", action: #selector(previous), keyEquivalent: "p")
         m.addItem(withTitle: "Save look", action: #selector(saveLook), keyEquivalent: "s")
+        m.addItem(withTitle: "Copy pattern", action: #selector(copyPattern), keyEquivalent: "c")
+        m.addItem(withTitle: "Paste pattern", action: #selector(pastePattern), keyEquivalent: "v")
         m.addItem(.separator())
         m.addItem(
             withTitle: "Quit Pixeldish", action: #selector(NSApplication.terminate(_:)),
@@ -77,36 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status = s
     }
 
-    // a Look is just the four things that decide a wallpaper, so history is a stack of them
-    func currentLook() -> [String: Any] {
-        let d = Pref.d
-        return [
-            "shape": d.integer(forKey: "shape"), "dither": d.integer(forKey: "dither"),
-            "palette": d.integer(forKey: "palette"), "seed": d.double(forKey: "seed"),
-            "pixelSize": d.double(forKey: "pixelSize"), "colors": d.integer(forKey: "colors"),
-            "warp": d.double(forKey: "warp"), "contrast": d.double(forKey: "contrast"),
-            "grain": d.double(forKey: "grain"), "vignette": d.double(forKey: "vignette"),
-            "spread": d.double(forKey: "spread"), "invert": d.bool(forKey: "invert"),
-            "paletteName": kPalettes[min(max(d.integer(forKey: "palette"), 0), kPalettes.count - 1)].0
-        ]
-    }
-
-    static let lookKeys: Set<String> = [
-        "shape", "dither", "palette", "seed", "pixelSize", "colors",
-        "warp", "contrast", "grain", "vignette", "spread", "invert"
-    ]
-
-    func apply(_ look: [String: Any]) {
-        let d = Pref.d
-        for (k, v) in look where Self.lookKeys.contains(k) {
-            d.set(v, forKey: k)
-        }
-        if let name = look["paletteName"] as? String, let i = paletteIndex(name) { d.set(i, forKey: "palette") }
-        d.set(false, forKey: "isPhoto")
-    }
-
     func pushHistory() {
-        history.append(currentLook())
+        history.append(currentPattern())
         if history.count > 24 { history.removeFirst() }
         Pref.d.set(history, forKey: "history")
     }
@@ -115,7 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastShuffle = Date()
         pushHistory()
         let d = Pref.d
-        d.set(Int.random(in: 0 ..< kShapeNames.count), forKey: "shape")
+        let shape = Int.random(in: 0 ..< kShapeNames.count)
+        d.set(shape, forKey: "shape")
+        for p in shapeParams(shape) {
+            d.set(Double.random(in: p.range), forKey: paramKey(shape, p))
+        }
         d.set(Int.random(in: 0 ..< kDitherNames.count), forKey: "dither")
         d.set(Int.random(in: 0 ..< kPalettes.count), forKey: "palette")
         d.set(timeSeed(), forKey: "seed")
@@ -131,23 +114,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wall.refresh()
     }
 
-    // ponytail: saved looks are a flat UserDefaults array with auto names, no
-    // thumbnails or rename; add a gallery if the list gets long
+    // ponytail: saved looks are a flat list with auto names, no thumbnails or
+    // rename (the config file takes a name); add a gallery if the list gets long
     @objc func saveLook() {
-        var look = currentLook()
+        var look = currentPattern()
         let df = DateFormatter()
         df.dateFormat = "MMM d HH:mm"
-        look["name"] =
-            "\(kShapeNames[min(max(Pref.d.integer(forKey: "shape"), 0), kShapeNames.count - 1)])"
-                + " / \(look["paletteName"] as? String ?? "?") / \(df.string(from: Date()))"
-        storeLooks([look] + savedLooks())
+        look["name"] = "\(look["shape"] ?? "?") / \(look["palette"] ?? "?") / \(df.string(from: Date()))"
+        storeLooks([look] + savedLooks().filter { $0["id"] as? String != look["id"] as? String })
+    }
+
+    // one line of KYAML: paste it into a chat, another Pixeldish, or nix-darwin
+    @objc func copyPattern() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(KYAML.emit(currentPattern(), line: true), forType: .string)
+    }
+
+    // takes a pattern, or the id of a saved one
+    @objc func pastePattern() {
+        guard let s = NSPasteboard.general.string(forType: .string),
+              let v = try? KYAML.parse(s.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let p = Config.resolve(v, savedLooks())
+        else { NSSound.beep()
+            return
+        }
+        pushHistory()
+        applyPattern(p)
+        wall.reset()
+        wall.refresh()
     }
 
     func loadSaved(_ i: Int) {
         let s = savedLooks()
         guard s.indices.contains(i) else { return }
         pushHistory()
-        apply(s[i])
+        applyPattern(s[i])
         wall.reset()
         wall.refresh()
     }
@@ -162,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func previous() {
         guard let last = history.popLast() else { return }
         Pref.d.set(history, forKey: "history")
-        apply(last)
+        applyPattern(last)
         wall.reset()
         wall.refresh()
     }
@@ -179,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onLoad: { [weak self] in self?.loadSaved($0) },
             onDelete: { [weak self] in self?.deleteSaved($0) },
             onPrevious: { [weak self] in self?.previous() },
+            onCopy: { [weak self] in self?.copyPattern() },
+            onPaste: { [weak self] in self?.pastePattern() },
             onPhoto: { [weak self] in self?.pickPhoto() },
             onPalettePhoto: { [weak self] in self?.pickPalettePhoto() },
             onStill: { [weak self] in self?.exportStill(save: false) },
@@ -262,6 +265,7 @@ extension AppDelegate {
     }
 
     func syncDesktop() {
+        Config.save()
         let photo = wall.renderers.first?.photo.map { "\(ObjectIdentifier($0 as AnyObject))" } ?? ""
         let key = "\(makeUniforms(w: 1, h: 1, time: 0))\(photo)"
         guard key != lastSync,
@@ -309,10 +313,13 @@ extension AppDelegate {
         try? fm.removeItem(at: dst)
         try? fm.copyItem(at: src, to: dst)
         // copyItem keeps the quarantine a brew/dmg install put on the app, and
-        // the screen saver host won't load a quarantined ad-hoc bundle
+        // the screen saver host won't load a quarantined ad-hoc bundle. A copy
+        // out of the nix store is read-only, which would block the next update
         let paths = [dst.path] + (fm.subpaths(atPath: dst.path) ?? []).map { dst.path + "/" + $0 }
         for p in paths {
             removexattr(p, "com.apple.quarantine", XATTR_NOFOLLOW)
+            var st = stat()
+            if lstat(p, &st) == 0 { chmod(p, st.st_mode | S_IWUSR) }
         }
     }
 }

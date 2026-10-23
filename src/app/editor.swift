@@ -25,12 +25,15 @@ struct EditorView: View {
     @AppStorage("launchAtLogin") var launchAtLogin = false
     @AppStorage("seed") var seed = 0.0
     @AppStorage("saved") var savedData = Data()
+    @AppStorage("patternID") var patternID = ""
     var onShuffle: () -> Void
     var onReseed: () -> Void
     var onSave: () -> Void
     var onLoad: (Int) -> Void
     var onDelete: (Int) -> Void
     var onPrevious: () -> Void
+    var onCopy: () -> Void
+    var onPaste: () -> Void
     var onPhoto: () -> Void
     var onPalettePhoto: () -> Void
     var onStill: () -> Void
@@ -57,6 +60,14 @@ struct EditorView: View {
                     }
                 }
                 Button("Palette from photo...", action: onPalettePhoto)
+            }
+
+            if !shapeParams(shape).isEmpty {
+                Section(shapeName(shape)) {
+                    ForEach(shapeParams(shape), id: \.key) { p in
+                        ParamSlider(param: p, key: paramKey(shape, p)).id(paramKey(shape, p))
+                    }
+                }
             }
 
             Section("Tuning") {
@@ -94,6 +105,13 @@ struct EditorView: View {
                 }
                 LabeledContent("Seed", value: String(format: "%.3f", seed))
                     .monospacedDigit().textSelection(.enabled)
+                LabeledContent("Pattern ID") {
+                    Text(patternID).font(.caption.monospaced()).textSelection(.enabled)
+                }
+                HStack {
+                    Button("Copy pattern", action: onCopy)
+                    Button("Paste pattern", action: onPaste)
+                }
                 HStack {
                     Button("Use a photo", action: onPhoto)
                     Button("Still frame", action: onStill)
@@ -111,7 +129,7 @@ struct EditorView: View {
                 ForEach(Array(savedLooks(savedData).enumerated()), id: \.offset) { i, look in
                     HStack {
                         Button(look["name"] as? String ?? "look \(i + 1)") { onLoad(i) }
-                            .buttonStyle(.link)
+                            .buttonStyle(.link).help(look["id"] as? String ?? "")
                         Spacer()
                         Button {
                             onDelete(i)
@@ -173,6 +191,30 @@ struct EditorView: View {
                 Slider(value: v, in: r).labelsHidden()
                 Text(String(format: "%.2f", v.wrappedValue)).monospacedDigit()
                     .foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
+            }
+            .frame(width: kControlWidth)
+        }
+    }
+}
+
+// one per shape knob; the key is only known at runtime, so it owns its AppStorage
+struct ParamSlider: View {
+    let param: ShapeParam
+    @AppStorage var value: Double
+
+    init(param: ShapeParam, key: String) {
+        self.param = param
+        _value = AppStorage(wrappedValue: param.def, key)
+    }
+
+    var body: some View {
+        let r = param.range
+        let v = Binding(get: { min(max(value, r.lowerBound), r.upperBound) }, set: { value = $0 })
+        LabeledContent(param.label) {
+            HStack {
+                Slider(value: v, in: r).labelsHidden()
+                Text(String(format: r.upperBound - r.lowerBound >= 10 ? "%.0f" : "%.2f", v.wrappedValue))
+                    .monospacedDigit().foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
             }
             .frame(width: kControlWidth)
         }

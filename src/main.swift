@@ -51,6 +51,8 @@ if let i = args.firstIndex(of: "--sheet") {
 if args.contains("--audit") { exit(runAudit() ? 0 : 1) }
 #endif
 if args.contains("--selftest") { exit(runSelftest() ? 0 : 1) }
+// --check <file.kyaml>: validate a config or pattern and print each pattern's id
+if let i = args.firstIndex(of: "--check") { exit(checkConfig(args.count > i + 1 ? args[i + 1] : "") ? 0 : 1) }
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

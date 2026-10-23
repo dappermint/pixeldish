@@ -1,10 +1,10 @@
 {
-  description = "pixeldish dev tools; the app itself builds with Command Line Tools via just";
+  description = "pixeldish: dithered procedural live wallpapers for macOS, with a nix-darwin module";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       systems = [
         "aarch64-darwin"
@@ -46,8 +46,75 @@
           unpackPhase = "unzip $src";
           installPhase = "install -Dm755 swiftlint $out/bin/swiftlint";
         };
+
+      version = builtins.head (builtins.match ''.*VERSION +:= +"([^"]+)".*'' (builtins.readFile ./justfile));
+
+      # nixpkgs has no AppKit/SwiftUI SDK, so this shells out to the Command Line
+      # Tools' swiftc, iconutil and codesign exactly like the justfile. It needs
+      # sandbox = false (the darwin default) or relaxed, where __noChroot applies
+      pixeldish =
+        pkgs:
+        pkgs.stdenvNoCC.mkDerivation {
+          pname = "pixeldish";
+          inherit version;
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./src
+              ./saver
+              ./tools
+              ./Info.plist
+              ./justfile
+            ];
+          };
+          __noChroot = true;
+          nativeBuildInputs = [ pkgs.just ];
+          buildPhase = ''
+            export HOME=$TMPDIR PATH=$PATH:/usr/bin
+            just icon build
+          '';
+          doCheck = true;
+          checkPhase = "build/Pixeldish.app/Contents/MacOS/Pixeldish --selftest";
+          installPhase = ''
+            mkdir -p $out/Applications
+            cp -R build/Pixeldish.app $out/Applications/
+          '';
+          meta = {
+            description = "Dithered procedural live wallpapers";
+            homepage = "https://github.com/dappermint/pixeldish";
+            license = pkgs.lib.licenses.mit;
+            platforms = pkgs.lib.platforms.darwin;
+            mainProgram = "Pixeldish";
+          };
+        };
     in
     {
+      packages = forAllSystems (pkgs: {
+        default = pixeldish pkgs;
+      });
+
+      darwinModules.default = import ./nix/module.nix self;
+
+      # renders a config the way the module does, which runs the app's --check over it
+      checks = forAllSystems (pkgs: {
+        config = pkgs.callPackage ./nix/config.nix { package = self.packages.${pkgs.stdenv.hostPlatform.system}.default; } {
+          settings.animate = true;
+          # the id of the torus below, as Pixeldish --check prints it
+          pattern = "683b638e-5c39-5b44-9bd2-ce3d17d5766a";
+          saved = [
+            ''{shape: "Torus", palette: "Dusk", params: {windings: 9}}''
+            {
+              shape = "Kerr";
+              palette = "Nord";
+              params = {
+                spin = 0.95;
+                inclination = 84;
+              };
+            }
+          ];
+        };
+      });
+
       # NoCC: a cc stdenv exports its own SDKROOT/DEVELOPER_DIR, which breaks the justfile's xcrun
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShellNoCC {

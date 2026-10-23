@@ -38,6 +38,9 @@ func runSelftest() -> Bool {
             check(name, ok)
         }
     }
+    for (name, ok) in configChecks() {
+        check(name, ok)
+    }
     check("dither names", kDitherNames.count == 13)
     check("palettes >= 20", kPalettes.count >= 20)
     let d0 = Pref.d.object(forKey: "contrast")
@@ -200,4 +203,62 @@ func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
     cb.waitUntilCompleted()
     let out = ob.contents().bindMemory(to: SIMD2<Float>.self, capacity: n)
     return groups.map { g in (g.0, !g.1.isEmpty && g.1.allSatisfy { g.2(out[$0]) }) }
+}
+
+func configChecks() -> [(String, Bool)] {
+    var out: [(String, Bool)] = []
+    let kerr: [String: Any] = [
+        "name": "gargantua", "shape": "kerr", "dither": "bayer 8", "palette": "Nord", "seed": 12.345,
+        "params": ["spin": 0.99, "inclination": 84]
+    ]
+    let doc: [String: Any] = ["settings": ["animate": true], "pattern": withID(kerr), "saved": [withID(kerr)]]
+    let text = KYAML.emit(doc)
+    let back = (try? KYAML.parse(text)).map { KYAML.emit($0) }
+    out.append(("kyaml round-trips", back == text))
+    let nixStyle = """
+    ---
+    # what nix writes: quoted keys, trailing commas
+    {"pattern": {"shape": "Torus", "params": {"windings": 9,},}, "saved": [], }
+    """
+    let n = try? KYAML.parse(nixStyle) as? [String: Any]
+    out.append((
+        "kyaml reads quoted keys and comments",
+        (n?["pattern"] as? [String: Any])?["shape"] as? String == "Torus"
+    ))
+    var line = ""
+    do { _ = try KYAML.parse("{\n  a: 1,\n  b: }") } catch { line = "\(error)" }
+    out.append(("kyaml errors name the line", line.hasPrefix("line 3")))
+
+    let p = normalizePattern(kerr)
+    out.append(("pattern names are canonical", p["shape"] as? String == "Kerr" && p["dither"] as? String == "Bayer 8"))
+    out.append((
+        "pattern fills missing params",
+        (p["params"] as? [String: Any])?["disk"] as? Double == 20 &&
+            (p["params"] as? [String: Any])?["spin"] as? Double == 0.99
+    ))
+    let legacy = normalizePattern(["shape": 16, "dither": 3, "palette": 0, "paletteName": "Nord", "warp": 7.0])
+    out.append((
+        "legacy looks map indices to names",
+        legacy["shape"] as? String == "Kerr" && legacy["palette"] as? String == "Nord"
+    ))
+    out.append(("pattern clamps out of range", legacy["warp"] as? Double == 1))
+
+    let id = patternID(kerr)
+    var renamed = kerr, reseeded = kerr
+    renamed["name"] = "other"
+    reseeded["seed"] = 12.346
+    out.append(("pattern id is a v5 uuid", UUID(uuidString: id) != nil && Array(id)[14] == "5"))
+    out.append(("pattern id ignores the name", patternID(renamed) == id))
+    out.append(("pattern id follows the content", patternID(reseeded) != id))
+    out.append((
+        "pattern id survives kyaml",
+        (try? KYAML.parse(KYAML.emit(kerr, line: true)) as? [String: Any]).map(patternID) == id
+    ))
+    out.append((
+        "check flags typos",
+        patternProblems(["shape": "kerrr"]).count == 1
+            && patternProblems(["shape": "Kerr", "params": ["spinn": 1]]).count == 1
+            && patternProblems(kerr).isEmpty
+    ))
+    return out
 }

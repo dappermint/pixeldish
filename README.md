@@ -13,10 +13,20 @@ in Swift and Metal. It has no dock icon and no dependencies.
 - 19 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
   vortex, sweep, glitch, twill, belts, circuit, julia, kali, torus, kerr, binary,
   cygnus
-- kerr ray traces a Kerr null geodesic per pixel (warp is the spin, 0 is
-  Schwarzschild) onto a Page-Thorne disk with g^4 beaming; the selftest checks
-  the shadow against Bardeen's analytic edge. binary superposes two
-  Schwarzschild lenses, cygnus is a hole fed by a Roche-lobe-filling supergiant
+- kerr ray traces a Kerr null geodesic per pixel onto a Page-Thorne disk with
+  g^4 beaming; the selftest checks the shadow against Bardeen's analytic edge.
+  binary superposes two Schwarzschild lenses, cygnus is a hole fed by a
+  Roche-lobe-filling supergiant
+- per-shape knobs: torus size, thickness, tumble, chase and windings; kerr spin
+  (0 is Schwarzschild), inclination, mass, disk temperature and radius; binary
+  mass ratio, separation, inclination, orbit speed, disk temperature; cygnus
+  star mass, inclination, orbit speed, stream, disk temperature. On the black
+  holes warp is disk turbulence
+- patterns with ids: every look has a UUID derived from its content, so the same
+  picture has the same id on any machine. Copy pattern / Paste pattern move it
+  as one line of KYAML
+- config in `~/.config/pixeldish/config.kyaml`, and a nix-darwin module that sets
+  everything down to the exact pattern
 - 13 dithers: smooth, poster, bayer 2/4/8/16, R2 (plastic-constant
   quasirandom), interleaved gradient noise, halftone, lines, diamond, ascii,
   benday
@@ -69,11 +79,78 @@ Click the grid icon in the menu bar:
 | Shuffle | ⌘R |
 | Previous | ⌘P |
 | Save look | ⌘S |
+| Copy pattern | ⌘C |
+| Paste pattern | ⌘V |
 | Quit | ⌘Q |
 
 The editor has every knob: shape, dither, palette, colour count, pixel size,
 warp, contrast, grain, vignette, zoom, spread, speed, invert, animate, hyper
 and hourly shuffle.
+
+## Patterns and config
+
+The app keeps its config in `~/.config/pixeldish/config.kyaml` and rewrites it
+on every change. [KYAML](https://kubernetes.io/docs/reference/encodings/kyaml/)
+is the strict flow-style YAML subset kubectl emits, so any YAML tool reads it:
+
+```yaml
+{
+  settings: {animate: true, autoShuffle: false, hyper: false},
+  pattern: {
+    shape: "Kerr",
+    palette: "Dracula Pro",
+    dither: "Bayer 8",
+    params: {spin: 0.95, inclination: 84, temperature: 1.3},
+  },
+  saved: [],
+}
+```
+
+Fields left out take their defaults. Shape, dither and palette go by name; a
+`Custom` palette carries its five colours in `custom: ["#rrggbb", ...]`. A
+pattern's id is a UUIDv5 of its canonical form without the name, so renaming
+keeps it and any other change makes a new one. Copy pattern puts the active
+pattern on the clipboard as one line, with its id; Paste pattern takes that or
+the id of a saved pattern.
+
+`Pixeldish --check file.kyaml` validates a config or a single pattern, prints
+each pattern's id and fails on unknown names, params or out-of-range values:
+
+```sh
+/Applications/Pixeldish.app/Contents/MacOS/Pixeldish --check ~/.config/pixeldish/config.kyaml
+```
+
+### nix-darwin
+
+```nix
+{
+  inputs.pixeldish.url = "github:dappermint/pixeldish";
+
+  # in the darwinSystem modules
+  imports = [ inputs.pixeldish.darwinModules.default ];
+  services.pixeldish = {
+    enable = true;
+    settings.animate = true;
+    pattern = {
+      shape = "Kerr";
+      palette = "Dracula Pro";
+      dither = "Bayer 8";
+      params = { spin = 0.95; inclination = 84; };
+    };
+    # or paste what Copy pattern gave you
+    saved = [ ''{shape: "Torus", palette: "Dusk", params: {windings: 9}}'' ];
+  };
+}
+```
+
+The module installs the app, starts it at login through launchd (leave the
+app's Launch at login off) and writes `/etc/pixeldish/config.kyaml`, which wins
+over the user file: its pattern applies at launch and on every switch that
+changes it, tweaks in the app last until then. `pattern` also takes the id of
+a `saved` entry. The generated file goes through `--check` at build time, so a
+misspelt name fails the switch instead of falling back. The package builds with
+the Command Line Tools' `swiftc`, so it needs `sandbox = false` (the darwin
+default) or `relaxed`.
 
 ## Building
 

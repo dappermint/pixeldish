@@ -7,6 +7,7 @@ struct Uniforms {
     float4 misc;    // seed, invert, time, spread
     float4 view;    // resX, resY, zoom, isPhoto
     float4 pal[5];
+    float4 shp[2];  // per-shape knobs, see kShapeParams
 };
 
 // ---------------------------------------------------------------- noise
@@ -79,16 +80,16 @@ static float diskShift(float r, float lam, float a) {
 // observed disk brightness, flux times g^4, streaked by gas shearing with the
 // Keplerian flow. Two layers crossfade on a cycle so the shear never winds the
 // pattern into stripes finer than a pixel
-static float diskLight(float r, float lam, float phi, float a, float time, float2 g) {
+static float diskLight(float r, float lam, float phi, float a, float time, float2 g, float turb, float temp) {
     float om = 1.0 / (r * sqrt(r) + a), c = time * 0.07, n = 0.0;
     for (int i = 0; i < 2; ++i) {
         float f = fract(c + 0.5 * float(i)), ang = phi - om * f * 110.0;
         n += (1.0 - abs(2.0 * f - 1.0))
            * fbm3(g + r * float2(cos(ang), sin(ang)) * 0.7 + floor(c + 0.5 * float(i)) * 13.1);
     }
-    float e = pow(diskShift(r, lam, a), 4.0) * ptFlux(r, a) / ptFlux(1.36 * iscoR(a), a);
+    float e = pow(diskShift(r, lam, a) * temp, 4.0) * ptFlux(r, a) / ptFlux(1.36 * iscoR(a), a);
     // flux falls as r^-3, so a gamma keeps the outer disk on screen
-    return 1.0 - exp(-2.0 * pow(e * (0.4 + 1.2 * n), 0.45));
+    return 1.0 - exp(-2.0 * pow(e * max(1.0 + turb * (2.4 * n - 1.2), 0.0), 0.45));
 }
 
 static float sky(float3 d, float2 g) {
@@ -167,7 +168,7 @@ static float roche(float3 x, float3 xs, float3 xb, float ms, float om2, thread f
 
 // ---------------------------------------------------------------- shapes
 
-static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
+static float fieldOf(int shape, float2 uv, float seed, float warp, float time, float4 p0, float4 p1)
 {
     float2 g = fract(float2(seed * 0.7137, seed * 0.3711)) * 64.0;
     // g only pans the noise; these make seeds differ in scale, handedness and drift
@@ -374,11 +375,12 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         return saturate((acc - 1.0) * 0.3);
     }
     case 15: {  // torus: a neon tube bent into a ring, tumbling, light chasing round it in a helix
-        float3 ro = float3(0.0, 0.0, -2.6), rd = normalize(float3(uv, 1.5));
-        float2x2 ra = rot(time * 0.21 + k.z * 6.2831853), rb = rot(hand * time * 0.13 + k.w * 6.2831853);
+                // p0: size, thickness, tumble, chase  p1.x: windings
+        float3 ro = float3(0.0, 0.0, -2.6 / p0.x), rd = normalize(float3(uv, 1.5));
+        float2x2 ra = rot(time * 0.21 * p0.z + k.z * 6.2831853), rb = rot(hand * time * 0.13 * p0.z + k.w * 6.2831853);
         ro.yz = ra * ro.yz; rd.yz = ra * rd.yz;
         ro.xy = rb * ro.xy; rd.xy = rb * rd.xy;
-        float tube = mix(0.2, 0.3, k.x), bound = 1.45 + tube;
+        float tube = p0.y, bound = 1.45 + tube;
         float b = dot(ro, rd), disc = b * b - dot(ro, ro) + bound * bound;
         if (disc <= 0.0) return 0.0;
         // the gas glows, the glass is clear: brightness is emission summed along the
@@ -388,30 +390,34 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
             float3 p = ro + rd * t;
             float2 q = float2(length(p.xz) - 1.0, p.y);
             float d = length(q), dt = clamp(0.5 * (d - tube), 0.03, 0.2);
-            float chase = sstep(1.5 * sin(6.0 * atan2(p.z, p.x) + 2.0 * hand * atan2(q.y, q.x) - time * 2.5) + 0.3);
+            float chase = sstep(1.5 * sin(round(p1.x) * atan2(p.z, p.x) + 2.0 * hand * atan2(q.y, q.x) - time * 2.5 * p0.w) + 0.3);
             acc += (exp(-3.0 * d * d / (tube * tube)) * (0.25 + 0.75 * chase)
                   + (0.02 + 0.08 * warp) * exp(-6.0 * max(d - tube, 0.0))) * dt;
             t += dt;
         }
         return 1.0 - exp(-5.0 * acc);
     }
-    case 16: {  // kerr: a spinning hole and its thin disk, ray traced; warp is the spin, 0 is Schwarzschild
-        float a = 0.998 * saturate(warp), inc = mix(1.22, 1.5, k.x);
-        float2 ab = float2(hand * uv.x, -uv.y) * 15.0;
-        Ray h = kerrRay(a, inc, ab, iscoR(a), 20.0);
-        if (h.kind == 1) return diskLight(h.r, h.lam, h.phi, a, time, g) * sstep((20.0 - h.r) / 6.0);
+    case 16: {  // kerr: a spinning hole and its thin disk, ray traced; spin 0 is Schwarzschild
+                // p0: spin, inclination (deg), mass, disk temperature  p1.x: disk outer radius
+        float a = p0.x, inc = p0.y * (M_PI_F / 180.0);
+        // a heavier hole is bigger on screen and its gas orbits slower, both linear in M
+        float2 ab = float2(hand * uv.x, -uv.y) * 15.0 / p0.z;
+        Ray h = kerrRay(a, inc, ab, iscoR(a), p1.x);
+        if (h.kind == 1)
+            return diskLight(h.r, h.lam, h.phi, a, time / p0.z, g, warp, p0.w) * sstep((p1.x - h.r) / (0.3 * p1.x));
         if (h.kind == 0) return 0.0;
         // the observer sits at infinity, so add the parallax a camera 40M out would see
         float3 up = float3(-cos(inc), 0.0, sin(inc));
-        return sky(normalize(h.dir + (ab.x * float3(0.0, 1.0, 0.0) + ab.y * up) / 40.0), g);
+        return sky(normalize(h.dir + (ab.x * float3(0.0, 1.0, 0.0) + ab.y * up) * p0.z / 40.0), g);
     }
     case 17: {  // binary: two holes on a slow orbit with minidisks, lensing the sky and each other
         // ponytail: lensing superposes two Schwarzschild pulls; the exact two-body
         // metric needs numerical relativity, not a fragment shader
-        float m2 = mix(0.4, 1.0, warp), sep = 34.0, ang = time * 0.05 + k.w * 6.2831853;
+        // p0: mass ratio, separation, inclination (deg), orbit speed  p1.x: disk temperature
+        float m2 = p0.x, sep = p0.y, ang = time * 0.05 * p0.w * pow(34.0 / sep, 1.5) + k.w * 6.2831853;
         float3 c1 = float3(float2(cos(ang), sin(ang)) * sep * m2 / (1.0 + m2), 0.0), c2 = -c1 / m2;
         // v runs backward along the light, so the photon's angular momentum is -(d x v)
-        float3 o, v = camRay(uv, mix(1.15, 1.45, k.x), 0.0, 2.4, hand, o), x = o * 70.0;
+        float3 o, v = camRay(uv, p0.z * (M_PI_F / 180.0), 0.0, 2.4, hand, o), x = o * 70.0 * sep / 34.0;
         for (int i = 0; i < 240; ++i) {
             float3 d1 = x - c1, d2 = x - c2;
             float r1 = length(d1), r2 = length(d2);
@@ -427,18 +433,20 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
                     float r = length(d) / m;
                     // minidisks are cut off by the companion's tides near a third of the separation
                     if (r > 6.0 && r * m < 0.32 * sep * pow(m, 1.0 / 3.0))
-                        return diskLight(r, -cross(d, v).z / m, atan2(d.y, d.x), 0.0, time / m, g);
+                        return diskLight(r, -cross(d, v).z / m, atan2(d.y, d.x), 0.0, time / m, g, warp, p1.x);
                 }
             }
             x = xn;
-            if (dot(x, x) > 75.0 * 75.0 && dot(x, v) > 0.0) return sky(normalize(v), g);
+            if (dot(x, x) > 5.0 * sep * sep && dot(x, v) > 0.0) return sky(normalize(v), g);
         }
         return 0.0;
     }
     case 18: {  // cygnus: a hole on a slow orbit round a supergiant that overflows its Roche lobe
                 // into the hole's disk. Drawn in the frame co-rotating with the orbit, where
                 // the star, stream and disk hold still and the camera circles
-        const float sep = 40.0, ms = 2.0;
+        // p0: star mass (in hole masses), inclination (deg), orbit speed, stream  p1.x: disk temperature
+        const float sep = 40.0;
+        float ms = p0.x;
         float om2 = (ms + 1.0) / (sep * sep * sep);
         float3 xs = float3(-sep / (ms + 1.0), 0.0, 0.0), xb = float3(sep * ms / (ms + 1.0), 0.0, 0.0);
         // L1: where gravity and the centrifugal pull cancel on the axis, the gradient falls monotonically
@@ -449,8 +457,11 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
         }
         float3 grad;
         float l1 = lo, reach = l1 - xs.x, surf = roche(float3(l1, 0.0, 0.0), xs, xb, ms, om2, grad);
-        float spin = sqrt(om2) * 10.0 * time;
-        float3 o, v = camRay(uv, mix(1.1, 1.4, k.x), k.w * 6.2831853 - spin, 4.5, hand, o), x = o * 120.0;
+        // the disk fills three quarters of the hole's Roche lobe (Eggleton's radius)
+        float q3 = pow(1.0 / ms, 1.0 / 3.0);
+        float rout = 0.75 * sep * 0.49 * q3 * q3 / (0.6 * q3 * q3 + log(1.0 + q3));
+        float spin = sqrt(om2) * 10.0 * time * p0.z;
+        float3 o, v = camRay(uv, p0.y * (M_PI_F / 180.0), k.w * 6.2831853 - spin, 4.5, hand, o), x = o * 120.0;
         float2x2 back = rot(spin);   // escaping rays look up at a sky that does not co-rotate
         float3 xp = x;
         for (int i = 0; i < 240; ++i) {
@@ -464,12 +475,20 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
                     float3 m = 0.5 * (lo3 + hi3);
                     if (roche(m, xs, xb, ms, om2, grad) < surf) hi3 = m; else lo3 = m;
                 }
+                // surface gravity at the pole, the brightest point, found up the spin axis
+                float zlo = 1.0, zhi = reach;
+                for (int j = 0; j < 16; ++j) {
+                    float zm = 0.5 * (zlo + zhi);
+                    if (roche(xs + float3(0.0, 0.0, zm), xs, xb, ms, om2, grad) < surf) zlo = zm; else zhi = zm;
+                }
+                roche(xs + float3(0.0, 0.0, zlo), xs, xb, ms, om2, grad);
+                float gpole = length(grad);
                 roche(hi3, xs, xb, ms, om2, grad);
                 float gn = length(grad);
                 float limb = 1.0 - 0.6 * (1.0 - abs(dot(grad / gn, normalize(v))));
                 float gran = fbm3(g + float2(hi3.x + hi3.z * 0.7, hi3.y - hi3.z * 0.6) * 0.45 + time * 0.05);
-                // von Zeipel: flux follows surface gravity (0.0075 at the pole), dark at the L1 tip
-                return saturate(0.85 * limb * gn / 0.0075 * (0.75 + 0.5 * gran));
+                // von Zeipel: flux follows surface gravity, so the L1 tip goes dark
+                return saturate(0.85 * limb * gn / gpole * (0.75 + 0.5 * gran));
             }
             // the potential over its gradient is a first-order distance to the star
             float ds = out > 0.0 ? out + 0.5 : (x.x < l1 ? 0.8 * (ph - surf) / length(grad) : 0.5);
@@ -480,13 +499,13 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time)
             if (xp.z * x.z < 0.0) {
                 float2 q = mix(xp, x, xp.z / (xp.z - x.z)).xy - xb.xy;
                 float rho = length(q), psi = atan2(q.y, q.x);
-                float2 spot = 10.0 * float2(cos(M_PI_F + 1.4), sin(M_PI_F + 1.4));
-                if (rho > 6.0 && rho < 11.0)
-                    return saturate(diskLight(rho, q.y * v.x - q.x * v.y, psi, 0.0, time, g)
+                float2 spot = 0.9 * rout * float2(cos(M_PI_F + 1.4), sin(M_PI_F + 1.4));
+                if (rho > 6.0 && rho < rout)
+                    return saturate(diskLight(rho, q.y * v.x - q.x * v.y, psi, 0.0, time, g, warp, p1.x)
                                     + 0.6 * exp(-0.3 * dot(q - spot, q - spot)));
                 // the stream leaves L1 and Coriolis swings it ahead of the hole into the rim
                 float s = fract((psi - M_PI_F) / 6.2831853) * 6.2831853 / 1.4;
-                float across = (rho - mix(xb.x - l1, 10.0, sqrt(s))) / (mix(0.5, 1.6, s) * (0.6 + 0.8 * warp));
+                float across = (rho - mix(xb.x - l1, 0.9 * rout, sqrt(s))) / (mix(0.5, 1.6, s) * (0.6 + 0.8 * p0.w));
                 if (s < 1.0 && abs(across) < 1.0)
                     return saturate((0.3 + 0.35 * s) * (1.0 - across * across)
                                     * (0.6 + 0.8 * fbm3(g + float2(s * 9.0 - time * 1.2, across))));
@@ -598,7 +617,7 @@ fragment float4 fmain(float4 pos [[position]],
     if (u.view.w > 0.5) {
         field = dot(photo.sample(smp, uv / res).rgb, float3(0.299, 0.587, 0.114));
     } else {
-        field = fieldOf(int(u.look.x), centered, u.misc.x, u.tune.x, u.misc.z);
+        field = fieldOf(int(u.look.x), centered, u.misc.x, u.tune.x, u.misc.z, u.shp[0], u.shp[1]);
     }
     // contrast, then spread: several shapes only reach the middle of the range
     // (Drift covers 0.21..0.83), so without this the end palette entries never
