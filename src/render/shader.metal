@@ -77,19 +77,33 @@ static float diskShift(float r, float lam, float a) {
     return 1.0 / (ut * (1.0 - om * lam));
 }
 
-// observed disk brightness, flux times g^4, streaked by gas shearing with the
-// Keplerian flow. Two layers crossfade on a cycle so the shear never winds the
-// pattern into stripes finer than a pixel
+// observed disk brightness: Page-Thorne flux times g^4, so whatever the gas does,
+// the side turning toward us flares. time is in M, the disk's own clock
 static float diskLight(float r, float lam, float phi, float a, float time, float2 g, float turb, float temp) {
-    float om = 1.0 / (r * sqrt(r) + a), c = time * 0.07, n = 0.0;
+    float om = 1.0 / (r * sqrt(r) + a), tM = time * 25.0;
+    // turbulence: noise on a small circle that slides through the field with r, so
+    // features run along the orbit and change fast across it, with no seam in phi.
+    // Two layers crossfade on a 120M cycle, so the shear never winds them finer than a pixel
+    float c = tM / 120.0, n = 0.0;
     for (int i = 0; i < 2; ++i) {
-        float f = fract(c + 0.5 * float(i)), ang = phi - om * f * 110.0;
-        n += (1.0 - abs(2.0 * f - 1.0))
-           * fbm3(g + r * float2(cos(ang), sin(ang)) * 0.7 + floor(c + 0.5 * float(i)) * 13.1);
+        float f = fract(c + 0.5 * float(i)), ang = phi - om * f * 120.0;
+        float2 q = g + floor(c + 0.5 * float(i)) * 13.1 + r * float2(1.6, 0.9);
+        n += (1.0 - abs(2.0 * f - 1.0)) * fbm5(q + 1.3 * float2(cos(ang), sin(ang)));
     }
-    float e = pow(diskShift(r, lam, a) * temp, 4.0) * ptFlux(r, a) / ptFlux(1.36 * iscoR(a), a);
+    float gas = mix(1.0, 0.15 + 1.7 * sstep((n - 0.5) * 2.5 + 0.5), saturate(1.6 * turb));
+    // hot spots ride their own orbits, rigid so they never wind up, and flare and fade over a life
+    float ri = iscoR(a), hot = 0.0;
+    for (int j = 0; j < 3; ++j) {
+        float life = tM / 400.0 + float(j) / 3.0, k = floor(life);
+        float2 h = float2(hash21(g + float2(k, float(j))), hash21(g + float2(float(j), k) + 4.7));
+        float rs = mix(1.15 * ri, 3.0 * ri + 4.0, h.x), ps = h.y * 6.2831853 + tM / (rs * sqrt(rs) + a);
+        float2 d = r * float2(cos(phi), sin(phi)) - rs * float2(cos(ps), sin(ps));
+        hot += sin(fract(life) * M_PI_F) * exp(-dot(d, d) / (0.25 * rs));
+    }
+    float flicker = 1.0 + 0.3 * turb * (vnoise(float2(tM * 0.02, g.x)) - 0.5);
+    float e = pow(diskShift(r, lam, a) * temp, 4.0) * ptFlux(r, a) / ptFlux(1.36 * ri, a);
     // flux falls as r^-3, so a gamma keeps the outer disk on screen
-    return 1.0 - exp(-2.0 * pow(e * max(1.0 + turb * (2.4 * n - 1.2), 0.0), 0.45));
+    return 1.0 - exp(-2.0 * pow(e * gas * (1.0 + 3.0 * turb * hot) * flicker, 0.45));
 }
 
 static float sky(float3 d, float2 g) {
