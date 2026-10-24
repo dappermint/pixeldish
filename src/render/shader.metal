@@ -158,6 +158,27 @@ static Ray kerrRay(float a, float inc, float2 ab, float rin, float rout) {
     return o;   // still circling the photon sphere: as good as fallen in
 }
 
+// the seed's noise pan and handedness; fieldOf and kerrTrace must agree on both
+static inline float2 seedPan(float seed) { return fract(float2(seed * 0.7137, seed * 0.3711)) * 64.0; }
+static inline float seedHand(float seed) { return hash21(float2(seed * 0.01, 9.2)) < 0.5 ? -1.0 : 1.0; }
+
+// a heavier hole is bigger on screen and its gas orbits slower, both linear in M
+static inline float2 kerrAB(float2 uv, float hand, float m) { return float2(hand * uv.x, -uv.y) * 15.0 / m; }
+
+// the clock-free half of Kerr, which the renderer caches per pixel and redoes only
+// when a knob moves: a disk hit as (r, phi), any other ray as (-field, 0), since
+// one that fell in or escaped looks the same every frame
+static float2 kerrTrace(float2 uv, float seed, float4 p0, float4 p1) {
+    float a = p0.x, inc = p0.y * (M_PI_F / 180.0);
+    float2 ab = kerrAB(uv, seedHand(seed), p0.z);
+    Ray h = kerrRay(a, inc, ab, iscoR(a), p1.x);
+    if (h.kind == 1) return float2(h.r, h.phi);
+    if (h.kind == 0) return 0.0;
+    // the observer sits at infinity, so add the parallax a camera 40M out would see
+    float3 up = float3(-cos(inc), 0.0, sin(inc));
+    return float2(-sky(normalize(h.dir + (ab.x * float3(0.0, 1.0, 0.0) + ab.y * up) * p0.z / 40.0), seedPan(seed)), 0.0);
+}
+
 // the central pull that makes a marched ray trace a Schwarzschild null geodesic
 // exactly: with h = |d x v| the orbit obeys u'' + u = 3 m u^2, whatever the speed
 static float3 bend(float3 d, float3 v, float m) {
@@ -182,14 +203,14 @@ static float roche(float3 x, float3 xs, float3 xb, float ms, float om2, thread f
 
 // ---------------------------------------------------------------- shapes
 
-static float fieldOf(int shape, float2 uv, float seed, float warp, float time, float4 p0, float4 p1)
+static float fieldOf(int shape, float2 uv, float seed, float warp, float time, float4 p0, float4 p1, float2 kt)
 {
-    float2 g = fract(float2(seed * 0.7137, seed * 0.3711)) * 64.0;
+    float2 g = seedPan(seed);
     // g only pans the noise; these make seeds differ in scale, handedness and drift
     float sk = seed * 0.01;
     float4 k = float4(hash21(float2(sk, 1.7)), hash21(float2(sk, 9.2)),
                       hash21(float2(sk, 3.1)), hash21(float2(sk, 5.5)));
-    float hand = k.y < 0.5 ? -1.0 : 1.0;
+    float hand = seedHand(seed);
     float2x2 drift = rot(k.z * 6.2831853);
 
     switch (shape) {
@@ -413,16 +434,10 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time, f
     }
     case 16: {  // kerr: a spinning hole and its thin disk, ray traced; spin 0 is Schwarzschild
                 // p0: spin, inclination (deg), mass, disk temperature  p1.x: disk outer radius
-        float a = p0.x, inc = p0.y * (M_PI_F / 180.0);
-        // a heavier hole is bigger on screen and its gas orbits slower, both linear in M
-        float2 ab = float2(hand * uv.x, -uv.y) * 15.0 / p0.z;
-        Ray h = kerrRay(a, inc, ab, iscoR(a), p1.x);
-        if (h.kind == 1)
-            return diskLight(h.r, h.lam, h.phi, a, time / p0.z, g, warp, p0.w) * sstep((p1.x - h.r) / (0.3 * p1.x));
-        if (h.kind == 0) return 0.0;
-        // the observer sits at infinity, so add the parallax a camera 40M out would see
-        float3 up = float3(-cos(inc), 0.0, sin(inc));
-        return sky(normalize(h.dir + (ab.x * float3(0.0, 1.0, 0.0) + ab.y * up) * p0.z / 40.0), g);
+                // kt: this pixel's kerrTrace, so a frame only has to light the disk
+        if (kt.x <= 0.0) return -kt.x;
+        float lam = -kerrAB(uv, hand, p0.z).x * sin(p0.y * (M_PI_F / 180.0));
+        return diskLight(kt.x, lam, kt.y, p0.x, time / p0.z, g, warp, p0.w) * sstep((p1.x - kt.x) / (0.3 * p1.x));
     }
     case 17: {  // binary: two holes on a slow orbit with minidisks, lensing the sky and each other
         // ponytail: lensing superposes two Schwarzschild pulls; the exact two-body
@@ -617,21 +632,32 @@ vertex VOut vmain(uint id [[vertex_id]]) {
     return o;
 }
 
+static inline float2 screenUV(float2 pos, constant Uniforms &u) {
+    return (pos - u.view.xy * 0.5) * (1.95 / max(u.view.z, 0.01)) / u.view.y;
+}
+
+// fills the renderer's per-pixel Kerr cache that fmain reads back
+fragment float4 ktrace(float4 pos [[position]], constant Uniforms &u [[buffer(0)]]) {
+    return float4(kerrTrace(screenUV(pos.xy, u), u.misc.x, u.shp[0], u.shp[1]), 0.0, 0.0);
+}
+
 fragment float4 fmain(float4 pos [[position]],
                       constant Uniforms &u [[buffer(0)]],
                       texture2d<float> photo [[texture(0)]],
-                      texture2d<float> atlas [[texture(1)]])
+                      texture2d<float> atlas [[texture(1)]],
+                      texture2d<float> trace [[texture(2)]])
 {
     constexpr sampler smp(filter::linear, address::clamp_to_edge);
     float2 res = u.view.xy;
     float2 uv = pos.xy;
-    float2 centered = (uv - res * 0.5) * (1.95 / max(u.view.z, 0.01)) / res.y;
 
     float field;
     if (u.view.w > 0.5) {
         field = dot(photo.sample(smp, uv / res).rgb, float3(0.299, 0.587, 0.114));
     } else {
-        field = fieldOf(int(u.look.x), centered, u.misc.x, u.tune.x, u.misc.z, u.shp[0], u.shp[1]);
+        int shape = int(u.look.x);
+        float2 kt = shape == 16 ? trace.read(uint2(uv)).xy : 0.0;
+        field = fieldOf(shape, screenUV(uv, u), u.misc.x, u.tune.x, u.misc.z, u.shp[0], u.shp[1], kt);
     }
     // contrast, then spread: several shapes only reach the middle of the range
     // (Drift covers 0.21..0.83), so without this the end palette entries never

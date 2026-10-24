@@ -158,8 +158,13 @@ final class DishRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     let queue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
+    let tracer: MTLRenderPipelineState
     var atlas: MTLTexture?
     var photo: MTLTexture?
+    // Kerr's geodesics never depend on the clock, only on these, so they are
+    // traced into `trace` once per change instead of every frame
+    var trace: MTLTexture?
+    var traceKey: [Float] = []
     var start = Date()
     var paused = false
     // PIXELDISH_PROBE reads the live drawable back for a few frames; used by
@@ -178,7 +183,8 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         let src = try? String(contentsOfFile: path, encoding: .utf8)
         guard let src, let lib = try? dev.makeLibrary(source: src, options: nil),
               let vf = lib.makeFunction(name: "vmain"),
-              let ff = lib.makeFunction(name: "fmain")
+              let ff = lib.makeFunction(name: "fmain"),
+              let kf = lib.makeFunction(name: "ktrace")
         else {
             FileHandle.standardError.write(Data("pixeldish: shader compile failed\n".utf8))
             return nil
@@ -188,19 +194,60 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         pd.fragmentFunction = ff
         pd.colorAttachments[0].pixelFormat = .rgba8Unorm
         guard let p = try? dev.makeRenderPipelineState(descriptor: pd) else { return nil }
+        pd.fragmentFunction = kf
+        pd.colorAttachments[0].pixelFormat = .rg32Float
+        guard let t = try? dev.makeRenderPipelineState(descriptor: pd) else { return nil }
         pipeline = p
+        tracer = t
         super.init()
         atlas = makeRampAtlas(dev)
     }
 
-    func encode(_ enc: MTLRenderCommandEncoder, _ u: Uniforms) {
+    func retrace(_ cb: MTLCommandBuffer, _ u: Uniforms) {
+        guard Int(u.look.x) == kShapeNames.firstIndex(of: "Kerr"), u.view.w < 0.5 else {
+            trace = nil
+            traceKey = []
+            return
+        }
+        let key = [u.view.x, u.view.y, u.view.z, u.misc.x, u.shp.0.x, u.shp.0.y, u.shp.0.z, u.shp.1.x]
+        guard key != traceKey else { return }
+        let w = Int(u.view.x), h = Int(u.view.y)
+        if trace?.width != w || trace?.height != h {
+            // ponytail: full floats cost ~80 MB on a 4K panel; rg16Float halves it but bands the outer disk
+            let td = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rg32Float,
+                width: w, height: h, mipmapped: false
+            )
+            td.usage = [.renderTarget, .shaderRead]
+            td.storageMode = .private
+            trace = device.makeTexture(descriptor: td)
+        }
+        guard let t = trace else { return }
+        let rp = MTLRenderPassDescriptor()
+        rp.colorAttachments[0].texture = t
+        rp.colorAttachments[0].loadAction = .dontCare
+        rp.colorAttachments[0].storeAction = .store
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rp) else { return }
+        var u = u
+        enc.setRenderPipelineState(tracer)
+        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
+        traceKey = key
+    }
+
+    func encode(_ cb: MTLCommandBuffer, _ rp: MTLRenderPassDescriptor, _ u: Uniforms) -> Bool {
+        retrace(cb, u)
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rp) else { return false }
         var u = u
         enc.setRenderPipelineState(pipeline)
         enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
         enc.setFragmentTexture(photo, index: 0)
         enc.setFragmentTexture(atlas, index: 1)
+        enc.setFragmentTexture(trace, index: 2)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
+        return true
     }
 
     // offscreen RGBA8 render; export, --capture, the selftest and the audit all go through here
@@ -215,8 +262,7 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         rp.colorAttachments[0].texture = rt
         rp.colorAttachments[0].loadAction = .clear
         rp.colorAttachments[0].storeAction = .store
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: rp) else { return nil }
-        encode(enc, u)
+        guard encode(cb, rp, u) else { return nil }
         cb.commit()
         cb.waitUntilCompleted()
         var px = [UInt8](repeating: 0, count: w * h * 4)
@@ -255,13 +301,12 @@ final class DishRenderer: NSObject, MTKViewDelegate {
     func draw(in view: MTKView) {
         guard let rp = view.currentRenderPassDescriptor,
               let rt = view.currentDrawable,
-              let cb = queue.makeCommandBuffer(),
-              let enc = cb.makeRenderCommandEncoder(descriptor: rp)
+              let cb = queue.makeCommandBuffer()
         else { return }
         rp.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         let size = view.drawableSize
-        encode(enc, makeUniforms(w: Int(size.width), h: Int(size.height), time: now))
+        guard encode(cb, rp, makeUniforms(w: Int(size.width), h: Int(size.height), time: now)) else { return }
         if probeFrames > 0 {
             probeFrames -= 1
             cb.present(rt)

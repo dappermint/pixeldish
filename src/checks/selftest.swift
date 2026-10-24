@@ -30,6 +30,15 @@ func runSelftest() -> Bool {
                 check("renders \(label) not blank", s.hi > 0 && s.lo < 255)
             }
         }
+        // the Kerr trace outlives a frame, so moving a knob has to redo it:
+        // after the change a warm renderer must still match a cold one
+        var u = comboUniforms(kShapeNames.firstIndex(of: "Kerr") ?? 0, 3, w: 96, h: 64)
+        _ = r.render(u, w: 96, h: 64)
+        u.shp.0.y = 40
+        u.misc.z += 7
+        let warm = r.render(u, w: 96, h: 64)
+        let cold = DishRenderer(shader: kShaderPath)?.render(u, w: 96, h: 64)
+        check("kerr retraces when a knob moves", warm != nil && warm == cold)
     }
 
     check("shape names", kShapeNames.count == 19)
