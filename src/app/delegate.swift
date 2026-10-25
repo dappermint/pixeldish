@@ -13,7 +13,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var syncWork: DispatchWorkItem?
     var lastSync = ""
     var ticks = 0
-    var lastStill = Date()
 
     func applicationDidFinishLaunching(_ n: Notification) {
         Pref.register()
@@ -44,14 +43,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // ponytail: polls both config files every 2s; a stat is cheaper than watching a symlink chain nix swaps
             ticks += 1
             if ticks % 40 == 0 { Config.poll() }
-            // ponytail: the system wallpaper (menu bar tint, Mission Control, lock screen) follows
-            // the animation once a minute; finer means a full-screen PNG write every few seconds.
-            // wall clock, not ticks: macOS throttles the timer when the app is napped
-            if live, Date().timeIntervalSince(lastStill) > 60 {
-                lastSync = ""
-                syncDesktop()
-            }
         }
+        // the wallpaper agent caches every image it is handed and never evicts (~17MB per
+        // still), so a periodic sync filled the disk; refresh only when the still is about to show
+        let refreshStill: (Notification) -> Void = { [weak self] _ in
+            guard let self, live else { return }
+            lastSync = ""
+            syncDesktop()
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main, using: refreshStill
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main, using: refreshStill
+        )
         wall.setPaused(!Pref.d.bool(forKey: "animate"))
         wall.refresh()
         NotificationCenter.default.addObserver(
@@ -278,7 +283,6 @@ extension AppDelegate {
               .appendingPathComponent("Pixeldish")
         else { return }
         lastSync = key
-        lastStill = Date()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // the wallpaper store ignores a URL it already shows, so alternate two names per display
         let slot = Pref.d.bool(forKey: "desktopSlot")
