@@ -146,18 +146,9 @@ func runSelftest() -> Bool {
 
 // the Kerr tracer against Bardeen's analytic shadow edge: rays 2% inside must fall
 // in, 2% outside must escape, and the disk side turning toward us must be
-// blueshifted. Runs the shader's own kerrRay through an extra kernel, not a copy
+// blueshifted. Runs the shader's own kerrRay through its kerrProbe kernel, not a copy
 func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
-    let probe = """
-    kernel void probe(device const float4 *q [[buffer(0)]], device float2 *o [[buffer(1)]],
-                      uint i [[thread_position_in_grid]]) {
-        float4 p = q[2 * i], d = q[2 * i + 1];
-        Ray h = kerrRay(p.x, p.y, p.zw, d.x, d.y);
-        o[i] = float2(h.kind, h.kind == 1 ? diskShift(h.r, h.lam, p.x) : 0.0);
-    }
-    """
-    guard let src = try? String(contentsOfFile: kShaderPath, encoding: .utf8),
-          let fn = (try? dev.makeLibrary(source: src + probe, options: nil))?.makeFunction(name: "probe"),
+    guard let fn = (try? dev.makeLibrary(URL: URL(fileURLWithPath: kShaderPath)))?.makeFunction(name: "kerrProbe"),
           let ps = try? dev.makeComputePipelineState(function: fn)
     else { return [("kerr probe builds", false)] }
 

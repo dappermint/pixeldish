@@ -49,8 +49,8 @@
 
       version = builtins.head (builtins.match ''.*VERSION +:= +"([^"]+)".*'' (builtins.readFile ./justfile));
 
-      # nixpkgs has no AppKit/SwiftUI SDK, so this shells out to the Command Line
-      # Tools' swiftc, iconutil and codesign exactly like the justfile. It needs
+      # nixpkgs has no AppKit/SwiftUI SDK, so this shells out to Xcode's swiftc,
+      # metal, iconutil and codesign exactly like the justfile. It needs
       # sandbox = false (the darwin default) or relaxed, where __noChroot applies
       pixeldish =
         pkgs:
@@ -69,8 +69,11 @@
           };
           __noChroot = true;
           nativeBuildInputs = [ pkgs.just ];
+          # xcrun only finds the downloaded Metal Toolchain for the user who
+          # downloaded it, not nixbld, so call the system-wide cryptex mount directly
           buildPhase = ''
             export HOME=$TMPDIR PATH=$PATH:/usr/bin
+            export METAL=$(echo /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-*/Metal.xctoolchain/usr/bin/metal)
             just icon build
           '';
           doCheck = true;

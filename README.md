@@ -171,9 +171,9 @@ just uninstall  # remove the app and its prefs
 `nix develop` gives a shell with `just` and pinned `swiftformat` and
 `swiftlint` for `just fmt` and `just lint`.
 
-The shader gets compiled at launch, not at build time, because the Command Line
-Tools come without a `metal` compiler. It ships as
-`Contents/Resources/shader.metal`.
+The shader is compiled at build time with `xcrun metal`, so building needs
+Xcode with the Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`),
+not just the Command Line Tools. It ships as `Contents/Resources/shader.metallib`.
 
 ## Layout
 

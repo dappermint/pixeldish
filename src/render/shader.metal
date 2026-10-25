@@ -685,3 +685,11 @@ fragment float4 fmain(float4 pos [[position]],
     float3 c = shade(int(u.look.y), field, uv, u.look.z, u.look.w, u, atlas);
     return float4(c, 1.0);
 }
+
+// selftest only: checks kerrRay against Bardeen's analytic shadow edge
+kernel void kerrProbe(device const float4 *q [[buffer(0)]], device float2 *o [[buffer(1)]],
+                      uint i [[thread_position_in_grid]]) {
+    float4 p = q[2 * i], d = q[2 * i + 1];
+    Ray h = kerrRay(p.x, p.y, p.zw, d.x, d.y);
+    o[i] = float2(h.kind, h.kind == 1 ? diskShift(h.r, h.lam, p.x) : 0.0);
+}

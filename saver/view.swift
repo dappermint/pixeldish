@@ -11,7 +11,7 @@ final class PixeldishSaverView: ScreenSaverView {
     let renderer: DishRenderer
 
     override init?(frame: NSRect, isPreview: Bool) {
-        guard let path = Bundle(for: PixeldishSaverView.self).path(forResource: "shader", ofType: "metal"),
+        guard let path = Bundle(for: PixeldishSaverView.self).path(forResource: "shader", ofType: "metallib"),
               let r = DishRenderer(shader: path)
         else { return nil }
         renderer = r

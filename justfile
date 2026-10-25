@@ -4,15 +4,19 @@ VERSION  := "0.5.2"
 APP      := "build/Pixeldish.app"
 BIN      := APP / "Contents/MacOS/Pixeldish"
 SWIFTC   := "/usr/bin/xcrun swiftc"
+METAL    := env("METAL", "/usr/bin/xcrun metal")
 
-# build the app bundle; the shader ships beside the binary and is compiled at
-# launch because this machine has Command Line Tools only, no metal compiler
-build:
+# needs Xcode's Metal Toolchain, the Command Line Tools have no metal compiler
+shader:
+    mkdir -p build
+    {{METAL}} -mmacosx-version-min=14.0 -o build/shader.metallib src/render/shader.metal
+
+build: shader
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{APP}}/Contents/MacOS" "{{APP}}/Contents/Resources"
     {{SWIFTC}} -O -o "{{BIN}}" $(find src -name "*.swift")
-    cp src/render/shader.metal "{{APP}}/Contents/Resources/"
+    cp build/shader.metallib "{{APP}}/Contents/Resources/"
     cp Info.plist "{{APP}}/Contents/"
     if [ -f build/AppIcon.icns ]; then cp build/AppIcon.icns "{{APP}}/Contents/Resources/"; fi
     # the screen saver ships inside the app, which installs it on launch; signed
@@ -21,7 +25,7 @@ build:
     rm -rf "$SAVER" && mkdir -p "$SAVER/Contents/MacOS" "$SAVER/Contents/Resources"
     {{SWIFTC}} -O -emit-library -module-name PixeldishSaver -o "$SAVER/Contents/MacOS/PixeldishSaver" \
         saver/view.swift src/app/prefs.swift $(find src/render -name "*.swift")
-    cp src/render/shader.metal "$SAVER/Contents/Resources/"
+    cp build/shader.metallib "$SAVER/Contents/Resources/"
     cp saver/Info.plist "$SAVER/Contents/"
     codesign -s - -f "$SAVER"
     codesign -s - -f "{{APP}}"
@@ -41,8 +45,7 @@ test: build audit
     "{{BIN}}" --selftest
 
 # dev-only, so it gets its own binary and never ships in the bundle
-audit:
-    mkdir -p build
+audit: shader
     {{SWIFTC}} -O -D AUDIT -o build/audit $(find src dev -name "*.swift")
     build/audit --audit > build/audit.txt || { cat build/audit.txt; exit 1; }
     tail -1 build/audit.txt

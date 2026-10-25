@@ -180,13 +180,12 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         else { return nil }
         device = dev
         queue = q
-        let src = try? String(contentsOfFile: path, encoding: .utf8)
-        guard let src, let lib = try? dev.makeLibrary(source: src, options: nil),
+        guard let lib = try? dev.makeLibrary(URL: URL(fileURLWithPath: path)),
               let vf = lib.makeFunction(name: "vmain"),
               let ff = lib.makeFunction(name: "fmain"),
               let kf = lib.makeFunction(name: "ktrace")
         else {
-            FileHandle.standardError.write(Data("pixeldish: shader compile failed\n".utf8))
+            FileHandle.standardError.write(Data("pixeldish: shader load failed\n".utf8))
             return nil
         }
         let pd = MTLRenderPipelineDescriptor()
@@ -337,4 +336,4 @@ final class DishRenderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 }
 
-let kShaderPath = Bundle.main.path(forResource: "shader", ofType: "metal") ?? "src/render/shader.metal"
+let kShaderPath = Bundle.main.path(forResource: "shader", ofType: "metallib") ?? "build/shader.metallib"
