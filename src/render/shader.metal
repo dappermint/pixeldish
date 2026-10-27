@@ -201,6 +201,133 @@ static float roche(float3 x, float3 xs, float3 xb, float ms, float om2, thread f
     return -ms / rs - 1.0 / rb - 0.5 * om2 * dot(x.xy, x.xy);
 }
 
+// ---------------------------------------------------------------- pipes
+
+struct PipeSeg {
+    float3 a;
+    float3 ba;
+    float invLenSq;
+};
+
+static void makePipes(float seed, float time, float spd,
+                      thread PipeSeg *segs, thread int &nSegs,
+                      thread float3 *corners, thread int &nCorners)
+{
+    nSegs = 0;
+    nCorners = 0;
+    float tGrow = max(0.0, time * 0.8 * spd);
+
+    for (int p = 0; p < 4; ++p) {
+        float ps = seed * 137.17 + float(p) * 91.31;
+        float3 cur = float3(
+            floor(fract(sin(ps + 12.9898) * 43758.5453) * 5.0) - 2.0,
+            floor(fract(sin(ps + 25.9796) * 43758.5453) * 5.0) - 2.0,
+            floor(fract(sin(ps + 38.9694) * 43758.5453) * 5.0) - 2.0
+        );
+        int lastAxis = int(fract(sin(ps + 51.9592) * 43758.5453) * 3.0);
+        corners[nCorners++] = cur;
+
+        float tPipe = tGrow + float(p) * 2.3;
+        float totalLen = fmod(tPipe, 9.0);
+
+        for (int step = 0; step < 6; ++step) {
+            if (float(step) > totalLen) break;
+            float st = ps + float(step) * 37.13;
+            float hAxis = fract(sin(st + 10.1) * 43758.5453);
+            int newAxis = (lastAxis + 1 + int(hAxis * 2.0)) % 3;
+
+            float newSign;
+            if (cur[newAxis] >= 2.2) newSign = -1.0;
+            else if (cur[newAxis] <= -2.2) newSign = 1.0;
+            else newSign = (fract(sin(st + 11.2) * 43758.5453) > 0.5) ? 1.0 : -1.0;
+
+            float hLen = fract(sin(st + 12.3) * 43758.5453);
+            float len = floor(hLen * 2.5) + 1.8;
+            if (newSign > 0.0 && cur[newAxis] + len > 3.6) len = max(1.0, 3.6 - cur[newAxis]);
+            else if (newSign < 0.0 && cur[newAxis] - len < -3.6) len = max(1.0, cur[newAxis] - (-3.6));
+
+            float progress = totalLen - float(step);
+            if (progress < 1.0) len *= progress;
+
+            float3 nxt = cur;
+            nxt[newAxis] += newSign * len;
+
+            float3 ba = nxt - cur;
+            float ba2 = dot(ba, ba);
+            if (ba2 > 1e-4) {
+                segs[nSegs++] = PipeSeg{ cur, ba, 1.0 / ba2 };
+                corners[nCorners++] = nxt;
+            }
+
+            cur = nxt;
+            lastAxis = newAxis;
+            if (progress < 1.0) break;
+        }
+    }
+}
+
+static float teapotSDF(float3 q, float r) {
+    float dB = length(float3(q.x, q.y * 1.25, q.z)) - r;
+    float dL = length(float3(q.x * 1.4, q.y - r * 0.65, q.z * 1.4)) - r * 0.38;
+    float dK = length(q - float3(0.0, r * 0.95, 0.0)) - r * 0.12;
+
+    float3 sq = q - float3(r * 0.5, r * 0.1, 0.0);
+    float2x2 rSpout = rot(-0.65);
+    sq.xy = rSpout * sq.xy;
+    float tSpout = clamp(sq.x, 0.0, r * 0.85);
+    float rSp = mix(r * 0.22, r * 0.12, tSpout / (r * 0.85));
+    float dSp = length(float3(sq.x - tSpout, sq.yz)) - rSp;
+
+    float3 hq = q - float3(-r * 0.75, r * 0.05, 0.0);
+    float dH = length(float2(length(hq.xy) - r * 0.65, hq.z)) - r * 0.14;
+    if (q.x > -r * 0.45) dH = 1e4;
+
+    return min(dB, min(dL, min(dK, min(dSp, dH))));
+}
+
+static float pipesSDF(float3 p, thread const PipeSeg *segs, int nSegs,
+                      thread const float3 *corners, int nCorners,
+                      float rPipe, float rBall, float jointMode, int teapotCorner)
+{
+    float minD2 = 1e6;
+    for (int i = 0; i < nSegs; ++i) {
+        float3 pa = p - segs[i].a;
+        float h = saturate(dot(pa, segs[i].ba) * segs[i].invLenSq);
+        float3 d = pa - segs[i].ba * h;
+        minD2 = min(minD2, dot(d, d));
+    }
+    float d = sqrt(minD2) - rPipe;
+
+    if (jointMode < 0.5) return d;
+
+    float minB2 = 1e6;
+    for (int j = 0; j < nCorners; ++j) {
+        if (j == teapotCorner || jointMode > 1.5) {
+            float dt = teapotSDF(p - corners[j], rPipe * 2.2);
+            d = min(d, dt);
+        } else {
+            float3 v = p - corners[j];
+            minB2 = min(minB2, dot(v, v));
+        }
+    }
+    float db = sqrt(minB2) - rBall;
+
+    return min(d, db);
+}
+
+static float3 pipesNormalSDF(float3 p, thread const PipeSeg *segs, int nSegs,
+                             thread const float3 *corners, int nCorners,
+                             float rPipe, float rBall, float jointMode, int teapotCorner)
+{
+    float2 e = float2(0.003, -0.003);
+    return normalize(
+        e.xyy * pipesSDF(p + e.xyy, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner) +
+        e.yyx * pipesSDF(p + e.yyx, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner) +
+        e.yxy * pipesSDF(p + e.yxy, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner) +
+        e.xxx * pipesSDF(p + e.xxx, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner)
+    );
+}
+
 // ---------------------------------------------------------------- shapes
 
 static float fieldOf(int shape, float2 uv, float seed, float warp, float time, float4 p0, float4 p1, float2 kt)
@@ -545,6 +672,61 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time, f
             }
         }
         return 0.0;
+    }
+    case 19: {  // pipes: classic windows 98 3d pipes screensaver with modern dithering
+                // p0: radius, joints, scale, speed  p1.x: shine
+        float rPipe = clamp(p0.x, 0.10, 0.35);
+        float rBall = rPipe * 1.45;
+        float jointMode = p0.y;
+        float scale = max(p0.z, 0.5);
+        float spd = p0.w;
+        float shine = p1.x;
+
+        PipeSeg segs[24];
+        float3 corners[28];
+        int nSegs = 0, nCorners = 0;
+        makePipes(seed, time, spd, segs, nSegs, corners, nCorners);
+
+        // classic Utah teapot easter egg: 1 teapot per scene on ball mode, or all on jointMode=2
+        int teapotCorner = (jointMode > 1.5) ? -1 : int(fmod(seed * 71.3, float(max(nCorners, 1))));
+
+        // Camera smoothly orbits the pipe volume
+        float camDist = 6.8 / scale;
+        float angY = time * 0.15 * spd + seed * 6.2831853;
+        float angX = sin(time * 0.08 * spd + seed * 3.14159) * 0.35 + 0.3;
+
+        float3 ro = float3(0.0, 0.0, -camDist);
+        float2x2 rx = rot(angX), ry = rot(angY);
+        ro.yz = rx * ro.yz; ro.xz = ry * ro.xz;
+
+        float3 rd = normalize(float3(uv, 1.5));
+        rd.yz = rx * rd.yz; rd.xz = ry * rd.xz;
+
+        float t = 1.0, tmax = 14.0;
+        bool hit = false;
+        for (int i = 0; i < 36; ++i) {
+            float3 p = ro + rd * t;
+            if (warp > 0.0) p += sin(p.zxy * 1.5) * (warp * 0.12);
+            float d = pipesSDF(p, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner);
+            if (d < 0.004) { hit = true; break; }
+            t += d * 0.9;
+            if (t > tmax) break;
+        }
+
+        if (!hit) return 0.0;
+
+        float3 hitP = ro + rd * t;
+        if (warp > 0.0) hitP += sin(hitP.zxy * 1.5) * (warp * 0.12);
+        float3 n = pipesNormalSDF(hitP, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner);
+
+        float3 ldir = normalize(float3(0.577, 0.577, -0.577));
+        float diff = max(dot(n, ldir), 0.0);
+        float3 h = normalize(ldir - rd);
+        float spec = pow(max(dot(n, h), 0.0), 16.0);
+        float back = max(dot(n, normalize(float3(-0.5, -0.4, 0.6))), 0.0) * 0.2;
+
+        float lum = 0.15 + 0.6 * diff + back + spec * 0.65 * shine;
+        return saturate(lum);
     }
     }
 }

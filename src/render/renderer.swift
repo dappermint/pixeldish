@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 let kShapeNames = [
     "Drift", "Shepard", "Sines", "Fringe", "Curtain", "Voronoi",
     "Contour", "Vortex", "Sweep", "Glitch", "Twill", "Belts", "Circuit",
-    "Julia", "Kali", "Torus", "Kerr", "Binary", "Cygnus"
+    "Julia", "Kali", "Torus", "Kerr", "Binary", "Cygnus", "Pipes"
 ]
 let kDitherNames = [
     "Smooth", "Poster", "Bayer 4", "Bayer 8", "Noise",
@@ -49,6 +49,13 @@ let kShapeParams: [String: [ShapeParam]] = [
         ShapeParam(key: "orbit", label: "Orbit speed", range: 0 ... 3, def: 1),
         ShapeParam(key: "stream", label: "Stream", range: 0 ... 1, def: 0.5),
         ShapeParam(key: "temperature", label: "Disk temperature", range: 0.5 ... 2, def: 1)
+    ],
+    "Pipes": [
+        ShapeParam(key: "radius", label: "Pipe radius", range: 0.08 ... 0.28, def: 0.16),
+        ShapeParam(key: "joints", label: "Joint style", range: 0 ... 2, def: 1),
+        ShapeParam(key: "scale", label: "Grid scale", range: 0.5 ... 2.0, def: 1),
+        ShapeParam(key: "speed", label: "Travel speed", range: 0 ... 3, def: 1),
+        ShapeParam(key: "shine", label: "Highlight", range: 0.2 ... 2.5, def: 1.2)
     ]
 ]
 

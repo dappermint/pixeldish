@@ -10,9 +10,9 @@ in Swift and Metal. It has no dock icon and no dependencies.
 
 ## Features
 
-- 19 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
+- 20 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
   vortex, sweep, glitch, twill, belts, circuit, julia, kali, torus, kerr, binary,
-  cygnus
+  cygnus, pipes
 - kerr ray traces a Kerr null geodesic per pixel onto a Page-Thorne disk with
   g^4 beaming; the selftest checks the shadow against Bardeen's analytic edge.
   binary superposes two Schwarzschild lenses, cygnus is a hole fed by a
@@ -20,8 +20,9 @@ in Swift and Metal. It has no dock icon and no dependencies.
 - per-shape knobs: torus size, thickness, tumble, chase and windings; kerr spin
   (0 is Schwarzschild), inclination, mass, disk temperature and radius; binary
   mass ratio, separation, inclination, orbit speed, disk temperature; cygnus
-  star mass, inclination, orbit speed, stream, disk temperature. On the black
-  holes warp is disk turbulence
+  star mass, inclination, orbit speed, stream, disk temperature; pipes pipe
+  radius, joint style (elbows, spheres, mixed), grid scale, travel speed and
+  highlight shine. On the black holes warp is disk turbulence
 - patterns with ids: every look has a UUID derived from its content, so the same
   picture has the same id on any machine. Copy pattern / Paste pattern move it
   as one line of KYAML
