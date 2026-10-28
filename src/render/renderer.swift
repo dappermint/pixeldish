@@ -62,8 +62,15 @@ let kShapeParams: [String: [ShapeParam]] = [
 func shapeName(_ i: Int) -> String { kShapeNames[min(max(i, 0), kShapeNames.count - 1)] }
 func shapeParams(_ shape: Int) -> [ShapeParam] { kShapeParams[shapeName(shape)] ?? [] }
 func paramKey(_ shape: Int, _ p: ShapeParam) -> String { "\(shapeName(shape).lowercased()).\(p.key)" }
-func targetFPS(shape: Int, isPhoto: Bool, hyper: Bool, maxFPS: Int = 120) -> Int {
-    hyper ? maxFPS : (!isPhoto && shape == kShapeNames.firstIndex(of: "Pipes") ? 60 : 20)
+// pipes follows the fps slider, scaled by the share of the display windows leave
+// visible; the per-pixel shapes stay on the 20 Hz timer and hyper overrides both
+func targetFPS(
+    shape: Int, isPhoto: Bool, hyper: Bool, fps: Double = 60, visible: Double = 1, maxFPS: Int = 120
+) -> Int {
+    if hyper { return maxFPS }
+    guard !isPhoto, shape == kShapeNames.firstIndex(of: "Pipes") else { return 20 }
+    let f = min(max(fps, 15), Double(maxFPS)) * min(max(visible, 0), 1)
+    return max(10, Int((f / 5).rounded()) * 5)
 }
 
 struct Uniforms {

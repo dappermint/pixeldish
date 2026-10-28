@@ -7,7 +7,7 @@ enum Pref {
         "warp": 0.5, "contrast": 1.0, "grain": 0.05, "vignette": 0.35,
         "speed": 0.35, "zoom": 1.0, "spread": 0.0, "animate": true,
         "invert": false, "launchAtLogin": false, "hyper": false,
-        "autoShuffle": false
+        "autoShuffle": false, "fps": 60.0
     ].merging(
         kShapeNames.indices.flatMap { s in shapeParams(s).map { (paramKey(s, $0), $0.def as Any) } }
     ) { $1 }
@@ -49,7 +49,8 @@ func storeLooks(_ looks: [[String: Any]]) {
 // makeUniforms clamps too, so saved looks and history from wider ranges stay sane
 let kRanges: [String: ClosedRange<Double>] = [
     "pixelSize": 1 ... 6, "warp": 0 ... 1, "contrast": 0.7 ... 1.8, "grain": 0 ... 0.12,
-    "vignette": 0 ... 1, "zoom": 0.7 ... 1.5, "spread": 0 ... 0.2, "speed": 0 ... 1
+    "vignette": 0 ... 1, "zoom": 0.7 ... 1.5, "spread": 0 ... 0.2, "speed": 0 ... 1,
+    "fps": 15 ... 120
 ]
 
 func prefValue(_ key: String) -> Float {

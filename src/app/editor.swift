@@ -20,6 +20,7 @@ struct EditorView: View {
     @AppStorage("animate") var animate = true
     @AppStorage("invert") var invert = false
     @AppStorage("hyper") var hyper = false
+    @AppStorage("fps") var fps = 60.0
     @AppStorage("autoShuffle") var autoShuffle = false
     @AppStorage("isPhoto") var isPhoto = false
     @AppStorage("launchAtLogin") var launchAtLogin = false
@@ -66,6 +67,10 @@ struct EditorView: View {
                 Section(shapeName(shape)) {
                     ForEach(shapeParams(shape), id: \.key) { p in
                         ParamSlider(param: p, key: paramKey(shape, p)).id(paramKey(shape, p))
+                    }
+                    if shapeName(shape) == "Pipes" {
+                        slider("Frame rate", $fps, "fps", format: "%.0f")
+                            .help("drops with how much of the display windows cover; hyper ignores it")
                     }
                 }
             }
@@ -180,7 +185,7 @@ struct EditorView: View {
         }
     }
 
-    func slider(_ label: String, _ raw: Binding<Double>, _ key: String) -> some View {
+    func slider(_ label: String, _ raw: Binding<Double>, _ key: String, format: String = "%.2f") -> some View {
         guard let r = kRanges[key] else { preconditionFailure("no slider range for \(key)") }
         let v = Binding(
             get: { min(max(raw.wrappedValue, r.lowerBound), r.upperBound) },
@@ -189,7 +194,7 @@ struct EditorView: View {
         return LabeledContent(label) {
             HStack {
                 Slider(value: v, in: r).labelsHidden()
-                Text(String(format: "%.2f", v.wrappedValue)).monospacedDigit()
+                Text(String(format: format, v.wrappedValue)).monospacedDigit()
                     .foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
             }
             .frame(width: kControlWidth)

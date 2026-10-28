@@ -337,12 +337,26 @@ func pipesChecks(_ r: DishRenderer) -> [(String, Bool)] {
         }
     }
     out.append((
-        "pipes frame rate is 60 normal / 120 hyper (others 20 / 120)",
+        "pipes frame rate follows the slider, eases with cover, hyper and other shapes untouched",
         targetFPS(shape: idx, isPhoto: false, hyper: false) == 60
-            && targetFPS(shape: idx, isPhoto: false, hyper: true, maxFPS: 120) == 120
+            && targetFPS(shape: idx, isPhoto: false, hyper: false, fps: 120) == 120
+            && targetFPS(shape: idx, isPhoto: false, hyper: false, fps: 120, maxFPS: 60) == 60
+            && targetFPS(shape: idx, isPhoto: false, hyper: false, fps: 120, visible: 0.5) == 60
+            && targetFPS(shape: idx, isPhoto: false, hyper: false, fps: 60, visible: 0) == 10
+            && targetFPS(shape: idx, isPhoto: false, hyper: true, fps: 30, visible: 0.1, maxFPS: 120) == 120
             && targetFPS(shape: idx, isPhoto: true, hyper: false) == 20
-            && targetFPS(shape: 0, isPhoto: false, hyper: false) == 20
+            && targetFPS(shape: 0, isPhoto: false, hyper: false, fps: 120) == 20
             && targetFPS(shape: 0, isPhoto: false, hyper: true, maxFPS: 120) == 120
+    ))
+    let scr = CGRect(x: 0, y: 0, width: 1_600, height: 1_000)
+    out.append((
+        "visible share: bare, half covered, overlapping windows counted once, fully covered",
+        visibleShare(scr, covers: []) == 1
+            && abs(visibleShare(scr, covers: [CGRect(x: 0, y: 0, width: 800, height: 1_000)]) - 0.5) < 0.01
+            && abs(visibleShare(scr, covers: [
+                CGRect(x: 0, y: 0, width: 800, height: 1_000), CGRect(x: 400, y: 0, width: 400, height: 1_000)
+            ]) - 0.5) < 0.01
+            && visibleShare(scr, covers: [scr.insetBy(dx: -10, dy: -10)]) == 0
     ))
     return out
 }

@@ -37,11 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let on = Pref.d.bool(forKey: "animate")
             if on != !wall.paused { wall.setPaused(!on) }
-            wall.tick(live: live, hyper: Pref.d.bool(forKey: "hyper"))
+            ticks += 1
+            wall.tick(live: live, hyper: Pref.d.bool(forKey: "hyper"), recount: ticks % 10 == 0)
             // ponytail: fixed hour, counted from launch or the last shuffle; a picker if anyone wants daily
             if Pref.d.bool(forKey: "autoShuffle"), Date().timeIntervalSince(lastShuffle) > 3_600 { shuffle() }
             // ponytail: polls both config files every 2s; a stat is cheaper than watching a symlink chain nix swaps
-            ticks += 1
             if ticks % 40 == 0 { Config.poll() }
         }
         // the wallpaper agent caches every image it is handed and never evicts (~17MB per

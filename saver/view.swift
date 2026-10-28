@@ -32,7 +32,8 @@ final class PixeldishSaverView: ScreenSaverView {
         Self.loadLook()
         let fps = isPreview ? 15 : targetFPS(
             shape: Pref.d.integer(forKey: "shape"), isPhoto: false,
-            hyper: Pref.d.bool(forKey: "hyper"), maxFPS: window?.screen?.maximumFramesPerSecond ?? 120
+            hyper: Pref.d.bool(forKey: "hyper"), fps: Double(prefValue("fps")),
+            maxFPS: window?.screen?.maximumFramesPerSecond ?? 120
         )
         animationTimeInterval = 1.0 / Double(fps)
         renderer.start = Date()

@@ -60,23 +60,44 @@ final class WallpaperController {
         }
     }
 
-    // normally the 20 Hz app timer asks for each frame; pipes runs at 60 Hz and
-    // hyper hands the view its own display link at the panel's top rate (120 Hz).
-    // Either way a fully covered window (fullscreen app, other Space) stops drawing
-    func tick(live: Bool, hyper: Bool) {
+    // normally the 20 Hz app timer asks for each frame; pipes hands the view its own
+    // display link at the fps slider's rate, eased down as windows cover more of the
+    // display, and hyper runs at the panel's top rate. A fully covered window
+    // (fullscreen app, other Space) stops drawing
+    func tick(live: Bool, hyper: Bool, recount: Bool = false) {
         let shape = Pref.d.integer(forKey: "shape"), photo = Pref.d.bool(forKey: "isPhoto")
-        for (v, w) in zip(views, windows) {
+        if recount || visible.count != screens.count { visible = visibleShares(screens.map(\.frame)) }
+        for (i, (v, w)) in zip(views, windows).enumerated() {
             let run = live && w.occlusionState.contains(.visible)
             let fps = targetFPS(
-                shape: shape, isPhoto: photo, hyper: hyper, maxFPS: w.screen?.maximumFramesPerSecond ?? 120
+                shape: shape, isPhoto: photo, hyper: hyper, fps: Double(prefValue("fps")),
+                visible: visible[i], maxFPS: w.screen?.maximumFramesPerSecond ?? 120
             )
             if v.preferredFramesPerSecond != fps { v.preferredFramesPerSecond = fps }
-            let selfDriven = run && fps > 20
+            let selfDriven = run && fps != 20
             if v.isPaused == selfDriven {
                 v.isPaused = !selfDriven
                 v.enableSetNeedsDisplay = !selfDriven
             }
             if run, !selfDriven { v.setNeedsDisplay(v.bounds) }
+        }
+    }
+
+    var visible: [Double] = []
+    func visibleShares(_ frames: [CGRect]) -> [Double] {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        let rects = list.compactMap { info -> CGRect? in
+            guard info[kCGWindowLayer as String] as? Int == 0,
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  let b = info[kCGWindowBounds as String] as? NSDictionary
+            else { return nil }
+            return CGRect(dictionaryRepresentation: b)
+        }
+        // CG window bounds are top-left origin on the primary display, NSScreen frames bottom-left
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        return frames.map { f in
+            visibleShare(CGRect(x: f.minX, y: top - f.maxY, width: f.width, height: f.height), covers: rects)
         }
     }
 
@@ -89,4 +110,21 @@ final class WallpaperController {
 
     func loadPhoto(_ url: URL) { renderers.forEach { $0.loadPhoto(url) } }
     func reset() { renderers.forEach { $0.start = Date() } }
+}
+
+// ponytail: samples a 32x20 grid instead of a true rect union; a window under one
+// cell (~3% of a display) can be missed, plenty for picking a frame rate
+func visibleShare(_ screen: CGRect, covers: [CGRect]) -> Double {
+    let cols = 32, rows = 20
+    var open = 0
+    for r in 0 ..< rows {
+        for c in 0 ..< cols {
+            let p = CGPoint(
+                x: screen.minX + (Double(c) + 0.5) * screen.width / Double(cols),
+                y: screen.minY + (Double(r) + 0.5) * screen.height / Double(rows)
+            )
+            if !covers.contains(where: { $0.contains(p) }) { open += 1 }
+        }
+    }
+    return Double(open) / Double(cols * rows)
 }
