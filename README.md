@@ -21,7 +21,7 @@ in Swift and Metal. It has no dock icon and no dependencies.
   (0 is Schwarzschild), inclination, mass, disk temperature and radius; binary
   mass ratio, separation, inclination, orbit speed, disk temperature; cygnus
   star mass, inclination, orbit speed, stream, disk temperature; pipes pipe
-  radius, joint style (elbows, spheres, mixed), grid scale, travel speed and
+  radius, joint style (elbows, mixed, spheres), grid scale, travel speed and
   highlight shine. On the black holes warp is disk turbulence
 - patterns with ids: every look has a UUID derived from its content, so the same
   picture has the same id on any machine. Copy pattern / Paste pattern move it

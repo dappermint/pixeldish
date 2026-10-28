@@ -201,131 +201,110 @@ static float roche(float3 x, float3 xs, float3 xb, float ms, float om2, thread f
     return -ms / rs - 1.0 / rb - 0.5 * om2 * dot(x.xy, x.xy);
 }
 
-// ---------------------------------------------------------------- pipes
+// ---------------------------------------------------------------- pipes (3D pass)
 
-struct PipeSeg {
-    float3 a;
-    float3 ba;
-    float invLenSq;
+struct PipeVertex {
+    float4 pos;
+    float4 norm;
 };
 
-static void makePipes(float seed, float time, float spd,
-                      thread PipeSeg *segs, thread int &nSegs,
-                      thread float3 *corners, thread int &nCorners)
+struct PipeInstance {
+    float4 c0;  // model col 0 .xyz, material (1..12) in .w
+    float4 c1;  // model col 1 .xyz, twoSided (0/1) in .w
+    float4 c2;  // model col 2 .xyz
+    float4 c3;  // model translation .xyz
+};
+
+struct PipeUniforms {
+    float4x4 view;
+    float4x4 proj;
+    float4 params;  // shine, dissolve, blockSize, cycleSeed
+};
+
+struct PipeVOut {
+    float4 pos [[position]];
+    float3 normEye;
+    float mat [[flat]];
+    float twoSided [[flat]];
+};
+
+// Win98 SCRSAVE/PIPES/STATE.CXX + COMMON/MATERIAL.C: shininess (specExp * 128) and ks
+constant float2 kPipeSpec[12] = {
+    float2(76.8, 0.75), float2(76.8, 0.75), float2(32.0, 0.62), float2(76.8, 0.72),
+    float2(28.0, 0.62), float2(32.0, 0.62), float2(51.2, 0.70), float2(64.0, 0.80),
+    float2(12.8, 0.36), float2(12.8, 0.36), float2(10.0, 0.34), float2(11.3, 0.36)
+};
+
+// Dracula Pro dim and normal/bright pipe stops, paired with u.pal[0] bg and #F8F8F2 highlight
+constant float3 kPipeDim[12] = {
+    float3(0.467, 0.400, 0.800), // #7766CC purple
+    float3(0.800, 0.400, 0.600), // #CC6699 pink
+    float3(0.400, 0.800, 0.733), // #66CCBB cyan
+    float3(0.431, 0.800, 0.400), // #6ECC66 green
+    float3(0.722, 0.537, 0.290), // #B8894A orange/copper
+    float3(0.800, 0.467, 0.400), // #CC7766 coral red
+    float3(0.651, 0.651, 0.325), // #A6A653 brass/gold
+    float3(0.475, 0.439, 0.663), // #7970A9 silver/comment
+    float3(0.314, 0.298, 0.404), // #504C67 amethyst satin
+    float3(0.306, 0.600, 0.286), // #4E9949 jade satin
+    float3(0.286, 0.600, 0.549), // #49998C teal rubber
+    float3(0.600, 0.302, 0.451)  // #994D73 blush pearl
+};
+
+constant float3 kPipeLit[12] = {
+    float3(0.584, 0.502, 1.000), // #9580FF purple
+    float3(1.000, 0.502, 0.749), // #FF80BF pink
+    float3(0.502, 1.000, 0.918), // #80FFEA cyan
+    float3(0.541, 1.000, 0.502), // #8AFF80 green
+    float3(1.000, 0.792, 0.502), // #FFCA80 orange
+    float3(1.000, 0.584, 0.502), // #FF9580 coral red
+    float3(0.902, 0.902, 0.451), // #E6E673 gold
+    float3(0.776, 0.776, 0.761), // #C6C6C2 silver/chrome
+    float3(0.667, 0.600, 1.000), // #AA99FF bright purple
+    float3(0.635, 1.000, 0.600), // #A2FF99 bright green
+    float3(0.600, 1.000, 0.933), // #99FFEE bright cyan
+    float3(1.000, 0.600, 0.800)  // #FF99CC bright pink
+};
+
+vertex PipeVOut pipesVert(uint vid [[vertex_id]],
+                          uint iid [[instance_id]],
+                          device const PipeVertex *verts [[buffer(0)]],
+                          device const PipeInstance *insts [[buffer(1)]],
+                          constant PipeUniforms &pu [[buffer(2)]])
 {
-    nSegs = 0;
-    nCorners = 0;
-    float tGrow = max(0.0, time * 0.8 * spd);
-
-    for (int p = 0; p < 4; ++p) {
-        float ps = seed * 137.17 + float(p) * 91.31;
-        float3 cur = float3(
-            floor(fract(sin(ps + 12.9898) * 43758.5453) * 5.0) - 2.0,
-            floor(fract(sin(ps + 25.9796) * 43758.5453) * 5.0) - 2.0,
-            floor(fract(sin(ps + 38.9694) * 43758.5453) * 5.0) - 2.0
-        );
-        int lastAxis = int(fract(sin(ps + 51.9592) * 43758.5453) * 3.0);
-        corners[nCorners++] = cur;
-
-        float tPipe = tGrow + float(p) * 2.3;
-        float totalLen = fmod(tPipe, 9.0);
-
-        for (int step = 0; step < 6; ++step) {
-            if (float(step) > totalLen) break;
-            float st = ps + float(step) * 37.13;
-            float hAxis = fract(sin(st + 10.1) * 43758.5453);
-            int newAxis = (lastAxis + 1 + int(hAxis * 2.0)) % 3;
-
-            float newSign;
-            if (cur[newAxis] >= 2.2) newSign = -1.0;
-            else if (cur[newAxis] <= -2.2) newSign = 1.0;
-            else newSign = (fract(sin(st + 11.2) * 43758.5453) > 0.5) ? 1.0 : -1.0;
-
-            float hLen = fract(sin(st + 12.3) * 43758.5453);
-            float len = floor(hLen * 2.5) + 1.8;
-            if (newSign > 0.0 && cur[newAxis] + len > 3.6) len = max(1.0, 3.6 - cur[newAxis]);
-            else if (newSign < 0.0 && cur[newAxis] - len < -3.6) len = max(1.0, cur[newAxis] - (-3.6));
-
-            float progress = totalLen - float(step);
-            if (progress < 1.0) len *= progress;
-
-            float3 nxt = cur;
-            nxt[newAxis] += newSign * len;
-
-            float3 ba = nxt - cur;
-            float ba2 = dot(ba, ba);
-            if (ba2 > 1e-4) {
-                segs[nSegs++] = PipeSeg{ cur, ba, 1.0 / ba2 };
-                corners[nCorners++] = nxt;
-            }
-
-            cur = nxt;
-            lastAxis = newAxis;
-            if (progress < 1.0) break;
-        }
-    }
+    PipeVertex v = verts[vid];
+    PipeInstance m = insts[iid];
+    float3 wp = m.c0.xyz * v.pos.x + m.c1.xyz * v.pos.y + m.c2.xyz * v.pos.z + m.c3.xyz;
+    float3 wn = m.c0.xyz * v.norm.x + m.c1.xyz * v.norm.y + m.c2.xyz * v.norm.z;
+    PipeVOut o;
+    o.pos = pu.proj * (pu.view * float4(wp, 1.0));
+    o.normEye = (pu.view * float4(wn, 0.0)).xyz;
+    o.mat = m.c0.w;
+    o.twoSided = m.c1.w;
+    return o;
 }
 
-static float teapotSDF(float3 q, float r) {
-    float dB = length(float3(q.x, q.y * 1.25, q.z)) - r;
-    float dL = length(float3(q.x * 1.4, q.y - r * 0.65, q.z * 1.4)) - r * 0.38;
-    float dK = length(q - float3(0.0, r * 0.95, 0.0)) - r * 0.12;
-
-    float3 sq = q - float3(r * 0.5, r * 0.1, 0.0);
-    float2x2 rSpout = rot(-0.65);
-    sq.xy = rSpout * sq.xy;
-    float tSpout = clamp(sq.x, 0.0, r * 0.85);
-    float rSp = mix(r * 0.22, r * 0.12, tSpout / (r * 0.85));
-    float dSp = length(float3(sq.x - tSpout, sq.yz)) - rSp;
-
-    float3 hq = q - float3(-r * 0.75, r * 0.05, 0.0);
-    float dH = length(float2(length(hq.xy) - r * 0.65, hq.z)) - r * 0.14;
-    if (q.x > -r * 0.45) dH = 1e4;
-
-    return min(dB, min(dL, min(dK, min(dSp, dH))));
-}
-
-static float pipesSDF(float3 p, thread const PipeSeg *segs, int nSegs,
-                      thread const float3 *corners, int nCorners,
-                      float rPipe, float rBall, float jointMode, int teapotCorner)
+fragment float4 pipesFrag(PipeVOut in [[stage_in]],
+                          bool front [[front_facing]],
+                          constant PipeUniforms &pu [[buffer(0)]])
 {
-    float minD2 = 1e6;
-    for (int i = 0; i < nSegs; ++i) {
-        float3 pa = p - segs[i].a;
-        float h = saturate(dot(pa, segs[i].ba) * segs[i].invLenSq);
-        float3 d = pa - segs[i].ba * h;
-        minD2 = min(minD2, dot(d, d));
-    }
-    float d = sqrt(minD2) - rPipe;
+    if (pu.params.y > 0.0 && hash21(floor(in.pos.xy / pu.params.z) + pu.params.w) < pu.params.y)
+        discard_fragment();
 
-    if (jointMode < 0.5) return d;
+    float3 n = normalize(in.normEye);
+    if (in.twoSided > 0.5 && !front) n = -n;
 
-    float minB2 = 1e6;
-    for (int j = 0; j < nCorners; ++j) {
-        if (j == teapotCorner || jointMode > 1.5) {
-            float dt = teapotSDF(p - corners[j], rPipe * 2.2);
-            d = min(d, dt);
-        } else {
-            float3 v = p - corners[j];
-            minB2 = min(minB2, dot(v, v));
-        }
-    }
-    float db = sqrt(minB2) - rBall;
+    // Win98 STATE::GLInit(): directional light0 at (90, 90, 150, 0), GL_LIGHT_MODEL_LOCAL_VIEWER = FALSE
+    const float3 L = float3(0.4618083, 0.4618083, 0.7574656);
+    const float3 H = float3(0.2456336, 0.2456336, 0.9377250);
+    float diff = max(dot(n, L), 0.0);
+    float rim = max(dot(n, float3(-0.35, -0.35, 0.87)), 0.0) * 0.07;
 
-    return min(d, db);
-}
-
-static float3 pipesNormalSDF(float3 p, thread const PipeSeg *segs, int nSegs,
-                             thread const float3 *corners, int nCorners,
-                             float rPipe, float rBall, float jointMode, int teapotCorner)
-{
-    float2 e = float2(0.003, -0.003);
-    return normalize(
-        e.xyy * pipesSDF(p + e.xyy, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner) +
-        e.yyx * pipesSDF(p + e.yyx, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner) +
-        e.yxy * pipesSDF(p + e.yxy, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner) +
-        e.xxx * pipesSDF(p + e.xxx, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner)
-    );
+    int m = clamp(int(in.mat + 0.5) - 1, 0, 11);
+    float2 sp = kPipeSpec[m];
+    float spec = pow(max(dot(n, H), 0.0), sp.x) * sp.y * (pu.params.x / 1.2);
+    float field = saturate(0.18 + 0.58 * diff + rim + spec * 0.44);
+    return float4(field, in.mat, 0.0, 1.0);
 }
 
 // ---------------------------------------------------------------- shapes
@@ -673,61 +652,8 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time, f
         }
         return 0.0;
     }
-    case 19: {  // pipes: classic windows 98 3d pipes screensaver with modern dithering
-                // p0: radius, joints, scale, speed  p1.x: shine
-        float rPipe = clamp(p0.x, 0.10, 0.35);
-        float rBall = rPipe * 1.45;
-        float jointMode = p0.y;
-        float scale = max(p0.z, 0.5);
-        float spd = p0.w;
-        float shine = p1.x;
-
-        PipeSeg segs[24];
-        float3 corners[28];
-        int nSegs = 0, nCorners = 0;
-        makePipes(seed, time, spd, segs, nSegs, corners, nCorners);
-
-        // classic Utah teapot easter egg: 1 teapot per scene on ball mode, or all on jointMode=2
-        int teapotCorner = (jointMode > 1.5) ? -1 : int(fmod(seed * 71.3, float(max(nCorners, 1))));
-
-        // Camera smoothly orbits the pipe volume
-        float camDist = 6.8 / scale;
-        float angY = time * 0.15 * spd + seed * 6.2831853;
-        float angX = sin(time * 0.08 * spd + seed * 3.14159) * 0.35 + 0.3;
-
-        float3 ro = float3(0.0, 0.0, -camDist);
-        float2x2 rx = rot(angX), ry = rot(angY);
-        ro.yz = rx * ro.yz; ro.xz = ry * ro.xz;
-
-        float3 rd = normalize(float3(uv, 1.5));
-        rd.yz = rx * rd.yz; rd.xz = ry * rd.xz;
-
-        float t = 1.0, tmax = 14.0;
-        bool hit = false;
-        for (int i = 0; i < 36; ++i) {
-            float3 p = ro + rd * t;
-            if (warp > 0.0) p += sin(p.zxy * 1.5) * (warp * 0.12);
-            float d = pipesSDF(p, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner);
-            if (d < 0.004) { hit = true; break; }
-            t += d * 0.9;
-            if (t > tmax) break;
-        }
-
-        if (!hit) return 0.0;
-
-        float3 hitP = ro + rd * t;
-        if (warp > 0.0) hitP += sin(hitP.zxy * 1.5) * (warp * 0.12);
-        float3 n = pipesNormalSDF(hitP, segs, nSegs, corners, nCorners, rPipe, rBall, jointMode, teapotCorner);
-
-        float3 ldir = normalize(float3(0.577, 0.577, -0.577));
-        float diff = max(dot(n, ldir), 0.0);
-        float3 h = normalize(ldir - rd);
-        float spec = pow(max(dot(n, h), 0.0), 16.0);
-        float back = max(dot(n, normalize(float3(-0.5, -0.4, 0.6))), 0.0) * 0.2;
-
-        float lum = 0.15 + 0.6 * diff + back + spec * 0.65 * shine;
-        return saturate(lum);
-    }
+    case 19:
+        return 0.0; // rendered in the 3D pipes pre-pass into `trace`
     }
 }
 
@@ -739,11 +665,34 @@ static inline float3 ramp(constant Uniforms &u, float t, float colors) {
     return mix(u.pal[i0].rgb, u.pal[i0 + 1].rgb, f - float(i0));
 }
 
+static inline float3 pipeRamp(constant Uniforms &u, int pipeMat, float t, float colors) {
+    if (pipeMat <= 0) return ramp(u, t, colors);
+    int n = clamp(int(colors + 0.5), 2, 5);
+    float3 mid = u.pal[min(2, n - 1)].rgb;
+    if (max(mid.x, max(mid.y, mid.z)) - min(mid.x, min(mid.y, mid.z)) < 0.04)
+        return ramp(u, t, colors);
+
+    int m = clamp(pipeMat - 1, 0, 11);
+    float3 bg = u.pal[0].rgb;
+    float3 p[5] = {
+        bg,
+        mix(bg, kPipeDim[m], 0.45),
+        kPipeDim[m],
+        kPipeLit[m],
+        float3(0.973, 0.973, 0.949)
+    };
+    float f = saturate(t) * float(n - 1);
+    int i0 = clamp(int(f), 0, n - 2);
+    int s0 = int(rint(float(i0) * 4.0 / float(n - 1)));
+    int s1 = (n == 2) ? 3 : int(rint(float(i0 + 1) * 4.0 / float(n - 1)));
+    return mix(p[s0], p[s1], f - float(i0));
+}
+
 // Every dither quantises the field onto the palette, so anything that wants to
 // darken or roughen the picture has to move the *field* before that happens.
 // Doing it to the colour afterwards invents colours the palette does not have.
 static float3 shade(int dither, float field, float2 uv, float pixelSize, float colors,
-                    constant Uniforms &u, texture2d<float> atlas)
+                    int pipeMat, constant Uniforms &u, texture2d<float> atlas)
 {
     constexpr sampler smp(filter::linear, address::clamp_to_edge);
     float levels = max(colors, 2.0) - 1.0;
@@ -752,7 +701,7 @@ static float3 shade(int dither, float field, float2 uv, float pixelSize, float c
 
     if (dither == 8) {          // ascii: glyph density is the shade, palette stays two-tone
         float lvl = min(floor(levels * field + 0.5), levels);
-        float3 fg = ramp(u, lvl / levels, colors);
+        float3 fg = pipeRamp(u, pipeMat, lvl / levels, colors);
         float gi = floor(saturate(lvl / levels) * 15.0 + 0.5);
         float au = ((cuv.x - 0.5) * 0.94 + 0.5 + gi) * 0.0625;
         float glyph = atlas.sample(smp, float2(au, cuv.y)).r;
@@ -776,7 +725,7 @@ static float3 shade(int dither, float field, float2 uv, float pixelSize, float c
             th = max(th, min(length(f) / 0.7071, 1.0));
         }
         float qz = min(floor(th + levels * field), levels) / levels;
-        return ramp(u, qz, colors);
+        return pipeRamp(u, pipeMat, qz, colors);
     }
 
     float phi = -1.0;
@@ -801,7 +750,7 @@ static float3 shade(int dither, float field, float2 uv, float pixelSize, float c
     }
 
     float qz = phi < 0.0 ? field : min(floor(phi + levels * field), levels) / levels;
-    return ramp(u, qz, colors);
+    return pipeRamp(u, pipeMat, qz, colors);
 }
 
 // ---------------------------------------------------------------- entry
@@ -833,13 +782,20 @@ fragment float4 fmain(float4 pos [[position]],
     float2 res = u.view.xy;
     float2 uv = pos.xy;
 
+    int pipeMat = 0;
     float field;
     if (u.view.w > 0.5) {
         field = dot(photo.sample(smp, uv / res).rgb, float3(0.299, 0.587, 0.114));
     } else {
         int shape = int(u.look.x);
-        float2 kt = shape == 16 ? trace.read(uint2(uv)).xy : 0.0;
-        field = fieldOf(shape, screenUV(uv, u), u.misc.x, u.tune.x, u.misc.z, u.shp[0], u.shp[1], kt);
+        if (shape == 19) {
+            float2 pt = trace.read(uint2(uv)).xy;
+            field = pt.x;
+            pipeMat = int(pt.y + 0.5);
+        } else {
+            float2 kt = shape == 16 ? trace.read(uint2(uv)).xy : 0.0;
+            field = fieldOf(shape, screenUV(uv, u), u.misc.x, u.tune.x, u.misc.z, u.shp[0], u.shp[1], kt);
+        }
     }
     // contrast, then spread: several shapes only reach the middle of the range
     // (Drift covers 0.21..0.83), so without this the end palette entries never
@@ -864,7 +820,7 @@ fragment float4 fmain(float4 pos [[position]],
     }
     field = saturate(field);
 
-    float3 c = shade(int(u.look.y), field, uv, u.look.z, u.look.w, u, atlas);
+    float3 c = shade(int(u.look.y), field, uv, u.look.z, u.look.w, pipeMat, u, atlas);
     return float4(c, 1.0);
 }
 

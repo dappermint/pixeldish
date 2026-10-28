@@ -166,6 +166,7 @@ final class DishRenderer: NSObject, MTKViewDelegate {
     let queue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
     let tracer: MTLRenderPipelineState
+    let pipes: PipeDrawer
     var atlas: MTLTexture?
     var photo: MTLTexture?
     // Kerr's geodesics never depend on the clock, only on these, so they are
@@ -202,33 +203,48 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         guard let p = try? dev.makeRenderPipelineState(descriptor: pd) else { return nil }
         pd.fragmentFunction = kf
         pd.colorAttachments[0].pixelFormat = .rg32Float
-        guard let t = try? dev.makeRenderPipelineState(descriptor: pd) else { return nil }
+        guard let t = try? dev.makeRenderPipelineState(descriptor: pd),
+              let pw = PipeDrawer(dev: dev, lib: lib)
+        else { return nil }
         pipeline = p
         tracer = t
+        pipes = pw
         super.init()
         atlas = makeRampAtlas(dev)
     }
 
-    func retrace(_ cb: MTLCommandBuffer, _ u: Uniforms) {
-        guard Int(u.look.x) == kShapeNames.firstIndex(of: "Kerr"), u.view.w < 0.5 else {
-            trace = nil
-            traceKey = []
-            return
-        }
-        let key = [u.view.x, u.view.y, u.view.z, u.misc.x, u.shp.0.x, u.shp.0.y, u.shp.0.z, u.shp.1.x]
-        guard key != traceKey else { return }
-        let w = Int(u.view.x), h = Int(u.view.y)
+    private func ensureTrace(w: Int, h: Int) -> MTLTexture? {
         if trace?.width != w || trace?.height != h {
-            // ponytail: full floats cost ~80 MB on a 4K panel; rg16Float halves it but bands the outer disk
+            // ponytail: full floats cost ~80 MB on a 4K panel; rg16Float halves it but bands Kerr's outer disk
             let td = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .rg32Float,
-                width: w, height: h, mipmapped: false
+                pixelFormat: .rg32Float, width: w, height: h, mipmapped: false
             )
             td.usage = [.renderTarget, .shaderRead]
             td.storageMode = .private
             trace = device.makeTexture(descriptor: td)
         }
-        guard let t = trace else { return }
+        return trace
+    }
+
+    func retrace(_ cb: MTLCommandBuffer, _ u: Uniforms) {
+        let shape = Int(u.look.x)
+        let isKerr = shape == kShapeNames.firstIndex(of: "Kerr")
+        let isPipes = shape == kShapeNames.firstIndex(of: "Pipes")
+        guard isKerr || isPipes, u.view.w < 0.5 else {
+            trace = nil
+            traceKey = []
+            pipes.clear()
+            return
+        }
+        let w = Int(u.view.x), h = Int(u.view.y)
+        if isPipes {
+            traceKey = []
+            if let t = ensureTrace(w: w, h: h) { pipes.encode(cb, into: t, u) }
+            return
+        }
+        pipes.clear()
+        let key = [u.view.x, u.view.y, u.view.z, u.misc.x, u.shp.0.x, u.shp.0.y, u.shp.0.z, u.shp.1.x]
+        guard key != traceKey, let t = ensureTrace(w: w, h: h) else { return }
         let rp = MTLRenderPassDescriptor()
         rp.colorAttachments[0].texture = t
         rp.colorAttachments[0].loadAction = .dontCare

@@ -43,7 +43,7 @@ func runSelftest() -> Bool {
 
     check("shape names", kShapeNames.count == 20)
     if let r {
-        for (name, ok) in kerrChecks(r.device) {
+        for (name, ok) in kerrChecks(r.device) + pipesChecks(r) {
             check(name, ok)
         }
     }
@@ -265,5 +265,76 @@ func configChecks() -> [(String, Bool)] {
             && patternProblems(["shape": "Kerr", "params": ["spinn": 1]]).count == 1
             && patternProblems(kerr).isEmpty
     ))
+    return out
+}
+
+func pipesChecks(_ r: DishRenderer) -> [(String, Bool)] {
+    var out: [(String, Bool)] = []
+    let m = r.pipes.meshes
+    out.append((
+        "pipes meshes built (cyl, sph, elb, teapot)",
+        !m.cyl.isEmpty && !m.sph.isEmpty && !m.elb.isEmpty && m.tea.count == 9_408
+    ))
+
+    var zeroCollisions = true, denseEnough = true
+    for cycle in 0 ..< 8 {
+        let sc = PipeScene.simulate(seed: Float(cycle) * 17.3, cycle: cycle, aspect: 1.54, jointMode: 1)
+        if sc.collisions != 0 { zeroCollisions = false }
+        if sc.prims.count < 100 || Set(sc.prims.map(\.mat)).count < 2 { denseEnough = false }
+    }
+    out.append(("pipes 3d grid is collision-free", zeroCollisions))
+    out.append(("pipes scene spawns multi-colour network", denseEnough))
+
+    let sElb = PipeScene.simulate(seed: 2.1, cycle: 1, aspect: 1.5, jointMode: 0)
+    let sMix = PipeScene.simulate(seed: 2.1, cycle: 1, aspect: 1.5, jointMode: 1)
+    let sBal = PipeScene.simulate(seed: 2.1, cycle: 1, aspect: 1.5, jointMode: 2)
+    func countJoints(_ s: PipeScene) -> (elb: Int, ball: Int) {
+        var e = 0, b = 0
+        for p in s.prims {
+            if case .elb = p.kind { e += 1 }
+            if case .ball = p.kind { b += 1 }
+        }
+        return (e, b)
+    }
+    let j0 = countJoints(sElb), j1 = countJoints(sMix), j2 = countJoints(sBal)
+    out.append((
+        "pipes joint modes (elbows, mixed, spheres)",
+        j0.elb > 0 && j0.ball == 0 && j1.elb > 0 && j1.ball > 0 && j2.elb == 0 && j2.ball > 0
+    ))
+
+    let idx = kShapeNames.firstIndex(of: "Pipes") ?? 19
+    let W = 240, H = 160
+    var u = comboUniforms(idx, 3, w: W, h: H)
+    if let vh = paletteIndex("Van Helsing") { u.setPalette(kPalettes[vh].1, colors: 5) }
+    if let px = r.render(u, w: W, h: H) {
+        var buckets = Set<Int>()
+        for i in stride(from: 0, to: px.count, by: 4) {
+            let rv = Int(px[i]), gv = Int(px[i + 1]), bv = Int(px[i + 2])
+            let mx = max(rv, max(gv, bv)), mn = min(rv, min(gv, bv))
+            if mx - mn > 50 {
+                let b = rv == mx ? (gv > bv + 30 ? 0 : 1) : (gv == mx ? (bv > rv + 30 ? 2 : 3) : 4)
+                buckets.insert(b)
+            }
+        }
+        out.append(("pipes renders multiple distinct pipe hues", buckets.count >= 3))
+    } else {
+        out.append(("pipes renders multiple distinct pipe hues", false))
+    }
+
+    if let mono = paletteIndex("Mono") {
+        u.setPalette(kPalettes[mono].1, colors: 5)
+        if let px = r.render(u, w: W, h: H) {
+            var neutral = true
+            for i in stride(from: 0, to: px.count, by: 4) {
+                let rv = Int(px[i]), gv = Int(px[i + 1]), bv = Int(px[i + 2])
+                if max(abs(rv - gv), abs(gv - bv)) > 8 { neutral = false
+                    break
+                }
+            }
+            out.append(("pipes stays greyscale on Mono palette", neutral))
+        } else {
+            out.append(("pipes stays greyscale on Mono palette", false))
+        }
+    }
     return out
 }
