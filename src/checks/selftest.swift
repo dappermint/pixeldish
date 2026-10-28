@@ -144,9 +144,10 @@ func runSelftest() -> Bool {
     return fails == 0
 }
 
-// the Kerr tracer against Bardeen's analytic shadow edge: rays 2% inside must fall
-// in, 2% outside must escape, and the disk side turning toward us must be
-// blueshifted. Runs the shader's own kerrRay through its kerrProbe kernel, not a copy
+// the Kerr tracer against Bardeen's analytic shadow edge: rays 0.01% inside must fall
+// in, 0.01% outside must escape; disk hits must land on the exact orbit; and the disk
+// side turning toward us must be blueshifted. Runs the shader's own kerrRay through
+// its kerrProbe kernel, not a copy
 func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
     guard let fn = (try? dev.makeLibrary(URL: URL(fileURLWithPath: kShaderPath)))?.makeFunction(name: "kerrProbe"),
           let ps = try? dev.makeComputePipelineState(function: fn)
@@ -166,8 +167,8 @@ func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
         }
     }
     var rays: [SIMD4<Float>] = []
-    var groups: [(String, Range<Int>, (SIMD2<Float>) -> Bool)] = []
-    func group(_ name: String, _ qs: [SIMD4<Float>], disk: SIMD2<Float>, _ ok: @escaping (SIMD2<Float>) -> Bool) {
+    var groups: [(String, Range<Int>, (SIMD4<Float>) -> Bool)] = []
+    func group(_ name: String, _ qs: [SIMD4<Float>], disk: SIMD2<Float>, _ ok: @escaping (SIMD4<Float>) -> Bool) {
         let lo = rays.count / 2
         for q in qs {
             rays += [q, SIMD4(disk.x, disk.y, 0, 0)]
@@ -177,10 +178,25 @@ func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
     for a in [0.0, 0.9, 0.998] {
         for deg in [60.0, 85.0] {
             let inc = deg * .pi / 180, pts = edge(a, inc)
-            for (side, s, kind) in [("inside", 0.98, 0), ("outside", 1.02, 2)] {
+            for (side, s, kind) in [("inside", 0.9999, 0), ("outside", 1.0001, 2)] {
                 let qs = pts.map { SIMD4(Float(a), Float(inc), Float($0.x * s), Float($0.y * s)) }
                 group("kerr a=\(a) i=\(Int(deg)) \(side) shadow edge", qs, disk: .zero) { Int($0.x) == kind }
             }
+        }
+    }
+    // where the ray meets the disk, from a double precision integration of the orbit:
+    // Schwarzschild via the Binet equation, Kerr via RK4 at h = 1e-4 in Mino time
+    // (agreeing to 1e-14 with h / 2). Grazing inclinations amplify any direction error,
+    // so a 1e-2 miss here was invisible to the shadow edge
+    let hits: [(Double, Double, Double, Double, Float, Float)] = [
+        (0, 85, 6, 1.5, 4.8542860, 2.8061451), (0, 85, -9, -0.5, 10.3742584, -1.0033095),
+        (0, 60, 2, 4, 2.5099834, 2.8966140), (0.998, 85, 6, 1.5, 3.1639828, 2.3874096),
+        (0.9, 60, -3, 2, 2.3675227, -3.0048412),
+    ]
+    for (a, deg, x, y, r, phi) in hits {
+        let q = SIMD4(Float(a), Float(deg * .pi / 180), Float(x), Float(y))
+        group("kerr a=\(a) i=\(Int(deg)) (\(Int(x)), \(y)) hits the disk at r=\(r)", [q], disk: SIMD2(1.5, 30)) {
+            $0.x == 1 && abs($0.z - r) < 1e-4 * r && abs($0.w - phi) < 1e-4
         }
     }
     let i80 = Float(80 * Double.pi / 180)
@@ -191,7 +207,7 @@ func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
 
     let n = rays.count / 2
     guard let qb = dev.makeBuffer(bytes: rays, length: rays.count * MemoryLayout<SIMD4<Float>>.stride),
-          let ob = dev.makeBuffer(length: n * MemoryLayout<SIMD2<Float>>.stride),
+          let ob = dev.makeBuffer(length: n * MemoryLayout<SIMD4<Float>>.stride),
           let cb = dev.makeCommandQueue()?.makeCommandBuffer(),
           let enc = cb.makeComputeCommandEncoder()
     else { return [("kerr probe runs", false)] }
@@ -206,7 +222,7 @@ func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
     enc.endEncoding()
     cb.commit()
     cb.waitUntilCompleted()
-    let out = ob.contents().bindMemory(to: SIMD2<Float>.self, capacity: n)
+    let out = ob.contents().bindMemory(to: SIMD4<Float>.self, capacity: n)
     return groups.map { g in (g.0, !g.1.isEmpty && g.1.allSatisfy { g.2(out[$0]) }) }
 }
 

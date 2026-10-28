@@ -59,12 +59,12 @@ static float iscoR(float a) {
 
 // Page-Thorne thin disk flux up to a constant: zero at the ISCO, r^-3 far out
 static float ptFlux(float r, float a) {
-    a = max(a, 1e-3);   // the x2 term is 0/0 at a = 0, its limit is 0
     float x = sqrt(r), x0 = sqrt(iscoR(a)), c = acos(a) / 3.0;
     float3 xr = 2.0 * float3(cos(c - M_PI_F / 3.0), cos(c + M_PI_F / 3.0), -cos(c));
     float s = x - x0 - 1.5 * a * log(x / x0);
     for (int i = 0; i < 3; ++i) {
         float xi = xr[i], xj = xr[(i + 1) % 3], xk = xr[(i + 2) % 3];
+        if (abs(xi) < 1e-6) continue;   // at a = 0 one root is 0 and its term is 0/0 with limit 0
         s -= 3.0 * (xi - a) * (xi - a) / (xi * (xi - xj) * (xi - xk)) * log((x - xi) / (x0 - xi));
     }
     return max(s, 0.0) / (r * r * (x * x * x - 3.0 * x + 2.0 * a));
@@ -115,45 +115,92 @@ static float sky(float3 d, float2 g) {
 }
 
 struct Ray { int kind; float r, phi, lam; float3 dir; };   // kind: 0 fell in, 1 hit the disk, 2 escaped
+struct KState { float u, vu; float3 n, vn; };
+struct KConst { float a, lam, w2, kk, aq; };
+
+static inline float uAcc(float u, KConst k) { return u * (-k.w2 + u * (3.0 * k.kk - 2.0 * k.aq * u)); }
+// n is a particle on the unit sphere in the potential -a^2 z^2 / 2: this is the
+// force's tangential part, the centripetal part is what the sphere supplies
+static inline float3 nAcc(float3 n, KConst k) { return k.a * k.a * n.z * float3(-n.z * n.xy, 1.0 - n.z * n.z); }
+// frame dragging: the rate n turns about the spin axis, in Mino time
+static inline float dragRate(float u, KConst k) {
+    return k.a * u * (2.0 - k.a * k.lam * u) / (1.0 - 2.0 * u + k.a * k.a * u * u);
+}
+// the full n', since vn is the velocity in the dragged frame
+static inline float3 nDot(KState s, KConst k) { return s.vn + dragRate(s.u, k) * float3(-s.n.y, s.n.x, 0.0); }
+
+// one kick-drift-kick step of h in Mino time. u drifts linearly; n drifts along
+// its great circle exactly, so |n| = 1 and n . vn = 0 hold to roundoff and
+// Schwarzschild's n is exact. The drag is a rotation about the spin axis, which
+// commutes with all of this, so the step is time-symmetric and three of them
+// with Yoshida's weights compose to a 4th order step
+static void kerrStep(thread KState &s, float h, KConst k) {
+    float vu = s.vu + 0.5 * h * uAcc(s.u, k);
+    float3 vn = s.vn + 0.5 * h * nAcc(s.n, k);
+    float u = s.u + h * vu, um = 0.5 * (s.u + u);
+    float w = length(vn), c = cos(w * h), sn = sin(w * h), sc = w > 1e-12 ? sn / w : h;
+    float3 n = s.n * c + vn * sc;
+    vn = vn * c - s.n * (w * sn);
+    float2x2 drag = rot(h * dragRate(um, k));
+    n.xy = drag * n.xy;
+    vn.xy = drag * vn.xy;
+    s.u = u;
+    s.vu = vu + 0.5 * h * uAcc(u, k);
+    s.n = n;
+    s.vn = vn + 0.5 * h * nAcc(n, k);
+}
+
+// cubic Hermite on f in [0, 1] from endpoint values and derivatives already scaled by the step
+template <typename T> static inline T herm(T x0, T d0, T x1, T d1, float f) {
+    float f2 = f * f, f3 = f2 * f;
+    return x0 * (2.0 * f3 - 3.0 * f2 + 1.0) + d0 * (f3 - 2.0 * f2 + f) + x1 * (3.0 * f2 - 2.0 * f3) + d1 * (f3 - f2);
+}
 
 // a Kerr null geodesic traced back from a distant observer at inclination inc
 // through Bardeen's image plane point ab. In Mino time r and theta decouple, so
-// velocity Verlet steps each like a 1D particle: u = 1/r obeys u'' = U'(u)/2 for
-// a polynomial U, and starts at exactly 0, so there is no far-field cut. The sky
-// direction n moves as n'' = -w2 n - a^2 ((1 + 2z^2) n.xy, 2z^3), which is
-// mu'' = Theta'(mu)/2 with the lam / sin^2 term folded in, plus frame dragging
-// turning it about the spin axis. Unlike phi it has no pole to blow up at
+// each steps like a 1D particle: u = 1/r obeys u'' = U'(u)/2 for a polynomial U,
+// and starts at exactly 0, so there is no far-field cut. The sky direction n is
+// a particle on the unit sphere with angular momentum lam about the spin axis
+// in the potential -a^2 z^2 / 2 (Carter's theta equation, with the lam / sin^2
+// term being the sphere's own centrifugal one), plus frame dragging turning it
+// about the axis. Unlike phi it has no pole to blow up at
 static Ray kerrRay(float a, float inc, float2 ab, float rin, float rout) {
     float lam = -ab.x * sin(inc);
     float q = ab.y * ab.y + (ab.x * ab.x - a * a) * cos(inc) * cos(inc);
-    float kk = (lam - a) * (lam - a) + q, w2 = q + lam * lam - a * a, aq = a * a * q;
+    KConst k = {a, lam, q + lam * lam - a * a, (lam - a) * (lam - a) + q, a * a * q};
+    // the drag has Delta in its denominator, so stop 1% outside the horizon: still
+    // inside the prograde photon orbit up to a = 0.998, so no escaping ray gets there
     float uh = 1.0 / (1.01 * (1.0 + sqrt(max(1.0 - a * a, 0.0))));
     Ray o = {0, 0.0, 0.0, lam, float3(0.0)};
     // forward in time the photon leaves for infinity at u' = -1; we step backward
-    float u = 0.0, vu = -1.0;
-    float3 n = float3(sin(inc), 0.0, cos(inc));
-    float3 vn = -(ab.x * float3(0.0, 1.0, 0.0) + ab.y * float3(-cos(inc), 0.0, sin(inc)));
-    float h = -0.12 / (sqrt(max(w2, 0.0)) + 2.0);
-    for (int i = 0; i < 320; ++i) {
-        float vu2 = vu + 0.5 * h * (u * (-w2 + u * (3.0 * kk - 2.0 * aq * u)));
-        float3 vn2 = vn - 0.5 * h * (w2 * n + a * a * float3((1.0 + 2.0 * n.z * n.z) * n.xy, 2.0 * n.z * n.z * n.z));
-        float un = u + h * vu2, um = 0.5 * (u + un);
-        float3 nn = normalize(n + h * vn2);
-        float2x2 drag = rot(h * a * um * (2.0 - a * lam * um) / (1.0 - 2.0 * um + a * a * um * um));
-        nn.xy = drag * nn.xy;
-        vn2.xy = drag * vn2.xy;
-        vu = vu2 + 0.5 * h * (un * (-w2 + un * (3.0 * kk - 2.0 * aq * un)));
-        vn = vn2 - 0.5 * h * (w2 * nn + a * a * float3((1.0 + 2.0 * nn.z * nn.z) * nn.xy, 2.0 * nn.z * nn.z * nn.z));
-        vn -= dot(vn, nn) * nn;
-        if (n.z * nn.z < 0.0) {
-            float f = n.z / (n.z - nn.z), rc = 1.0 / max(mix(u, un, f), 1e-6);
-            float3 c = mix(n, nn, f);
+    KState s = {0.0, -1.0, float3(sin(inc), 0.0, cos(inc)),
+                -(ab.x * float3(0.0, 1.0, 0.0) + ab.y * float3(-cos(inc), 0.0, sin(inc)))};
+    // 4th order in h: disk hits land within 1e-5 of the exact Schwarzschild orbit
+    // at any inclination, and smaller h gains nothing more in float
+    float h = -0.12 / (sqrt(max(k.w2, 0.0)) + 2.0);
+    // Yoshida: forward, back, forward with weights 1 / (2 - cbrt 2) and -cbrt 2 / (2 - cbrt 2)
+    const float w1 = 1.3512071919596578, w0 = -1.7024143839193153;
+    // 640 steps resolves the shadow edge to 2e-5 of its radius; below that float decides
+    for (int i = 0; i < 640; ++i) {
+        KState p = s;
+        kerrStep(s, h * w1, k);
+        kerrStep(s, h * w0, k);
+        kerrStep(s, h * w1, k);
+        if (p.n.z * s.n.z < 0.0) {
+            // the step's endpoints are 4th order, so interpolate the crossing to match:
+            // Newton on the Hermite cubic of n.z, seeded by the chord
+            float f = p.n.z / (p.n.z - s.n.z), z0 = p.n.z, d0 = h * p.vn.z, z1 = s.n.z, d1 = h * s.vn.z;
+            for (int j = 0; j < 2; ++j) {
+                float dz = z0 * (6.0 * f * f - 6.0 * f) + d0 * (3.0 * f * f - 4.0 * f + 1.0)
+                         + z1 * (6.0 * f - 6.0 * f * f) + d1 * (3.0 * f * f - 2.0 * f);
+                f = saturate(f - herm(z0, d0, z1, d1, f) / dz);
+            }
+            float rc = 1.0 / max(herm(p.u, h * p.vu, s.u, h * s.vu, f), 1e-6);
+            float3 c = herm(p.n, h * nDot(p, k), s.n, h * nDot(s, k), f);
             if (rc > rin && rc < rout) { o.kind = 1; o.r = rc; o.phi = atan2(c.y, c.x); return o; }
         }
-        u = un;
-        n = nn;
-        if (u > uh) return o;
-        if (u < 0.0) { o.kind = 2; o.dir = n; return o; }
+        if (s.u > uh) return o;
+        if (s.u < 0.0) { o.kind = 2; o.dir = s.n; return o; }
     }
     return o;   // still circling the photon sphere: as good as fallen in
 }
@@ -898,6 +945,8 @@ static float3 shade(int dither, float field, float2 uv, float pixelSize, float c
     float phi = -1.0;
     switch (dither) {
     case 1: phi = 0.5; break;
+    // + 1/(2n^2), half a threshold step: the n x n matrix rounds the field to its nearest level
+    // instead of flooring it, so mean ink matches the field rather than sitting a half step dark
     case 2: phi = bayer2(cell * 0.5) * 0.25 + bayer2(cell) + 0.03125; break;
     case 3: phi = bayer2(cell) + 0.0078125
                + 0.25 * (bayer2(cell * 0.5) + 0.25 * bayer2(cell * 0.25)); break;
@@ -992,9 +1041,9 @@ fragment float4 fmain(float4 pos [[position]],
 }
 
 // selftest only: checks kerrRay against Bardeen's analytic shadow edge
-kernel void kerrProbe(device const float4 *q [[buffer(0)]], device float2 *o [[buffer(1)]],
+kernel void kerrProbe(device const float4 *q [[buffer(0)]], device float4 *o [[buffer(1)]],
                       uint i [[thread_position_in_grid]]) {
     float4 p = q[2 * i], d = q[2 * i + 1];
     Ray h = kerrRay(p.x, p.y, p.zw, d.x, d.y);
-    o[i] = float2(h.kind, h.kind == 1 ? diskShift(h.r, h.lam, p.x) : 0.0);
+    o[i] = float4(h.kind, h.kind == 1 ? diskShift(h.r, h.lam, p.x) : 0.0, h.r, h.phi);
 }
