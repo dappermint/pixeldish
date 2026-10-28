@@ -164,6 +164,10 @@ final class PipeDrawer {
         scene: PipeScene, curTick: Float, r: Float
     ) -> (cyl: [PipeInstance], sph: [PipeInstance], elb: [PipeInstance], tea: [PipeInstance]) {
         var cyl: [PipeInstance] = [], sph: [PipeInstance] = [], elb: [PipeInstance] = [], tea: [PipeInstance] = []
+        let n = scene.prims.count
+        cyl.reserveCapacity(n)
+        sph.reserveCapacity(n / 2 + 8)
+        elb.reserveCapacity(n / 2)
         let rCap = 1.41421356 * r, rBall = 1.4264053 * r
         for p in scene.prims where p.tick <= curTick {
             let mf = Float(p.mat) + 1

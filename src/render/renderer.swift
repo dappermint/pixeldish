@@ -62,6 +62,9 @@ let kShapeParams: [String: [ShapeParam]] = [
 func shapeName(_ i: Int) -> String { kShapeNames[min(max(i, 0), kShapeNames.count - 1)] }
 func shapeParams(_ shape: Int) -> [ShapeParam] { kShapeParams[shapeName(shape)] ?? [] }
 func paramKey(_ shape: Int, _ p: ShapeParam) -> String { "\(shapeName(shape).lowercased()).\(p.key)" }
+func targetFPS(shape: Int, isPhoto: Bool, hyper: Bool, maxFPS: Int = 120) -> Int {
+    hyper ? maxFPS : (!isPhoto && shape == kShapeNames.firstIndex(of: "Pipes") ? 60 : 20)
+}
 
 struct Uniforms {
     var look: SIMD4<Float> = .zero

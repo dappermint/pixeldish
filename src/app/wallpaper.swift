@@ -60,20 +60,23 @@ final class WallpaperController {
         }
     }
 
-    // normally the 20 Hz app timer asks for each frame; hyper hands the view its
-    // own display link at the panel's top rate. Either way a window the system
-    // reports fully covered (fullscreen app, other Space) stops drawing
+    // normally the 20 Hz app timer asks for each frame; pipes runs at 60 Hz and
+    // hyper hands the view its own display link at the panel's top rate (120 Hz).
+    // Either way a fully covered window (fullscreen app, other Space) stops drawing
     func tick(live: Bool, hyper: Bool) {
+        let shape = Pref.d.integer(forKey: "shape"), photo = Pref.d.bool(forKey: "isPhoto")
         for (v, w) in zip(views, windows) {
             let run = live && w.occlusionState.contains(.visible)
-            let fps = hyper ? (w.screen?.maximumFramesPerSecond ?? 120) : 20
+            let fps = targetFPS(
+                shape: shape, isPhoto: photo, hyper: hyper, maxFPS: w.screen?.maximumFramesPerSecond ?? 120
+            )
             if v.preferredFramesPerSecond != fps { v.preferredFramesPerSecond = fps }
-            let selfDriven = run && hyper
+            let selfDriven = run && fps > 20
             if v.isPaused == selfDriven {
                 v.isPaused = !selfDriven
                 v.enableSetNeedsDisplay = !selfDriven
             }
-            if run, !hyper { v.setNeedsDisplay(v.bounds) }
+            if run, !selfDriven { v.setNeedsDisplay(v.bounds) }
         }
     }
 

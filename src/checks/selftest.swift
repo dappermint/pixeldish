@@ -336,5 +336,13 @@ func pipesChecks(_ r: DishRenderer) -> [(String, Bool)] {
             out.append(("pipes stays greyscale on Mono palette", false))
         }
     }
+    out.append((
+        "pipes frame rate is 60 normal / 120 hyper (others 20 / 120)",
+        targetFPS(shape: idx, isPhoto: false, hyper: false) == 60
+            && targetFPS(shape: idx, isPhoto: false, hyper: true, maxFPS: 120) == 120
+            && targetFPS(shape: idx, isPhoto: true, hyper: false) == 20
+            && targetFPS(shape: 0, isPhoto: false, hyper: false) == 20
+            && targetFPS(shape: 0, isPhoto: false, hyper: true, maxFPS: 120) == 120
+    ))
     return out
 }

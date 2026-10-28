@@ -39,7 +39,7 @@ in Swift and Metal. It has no dock icon and no dependencies.
   Mode
 - shuffle every hour
 - hyper: demo mode that draws at the display's top refresh rate (120 Hz on
-  ProMotion)
+  ProMotion); pipes runs at 60 Hz in normal mode and 120 Hz in hyper
 - live animated desktop layer on every display, or a still frame
 - use a photo as the source image
 - export a PNG for each display
