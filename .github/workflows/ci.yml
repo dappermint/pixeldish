@@ -3,7 +3,11 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+
+permissions:
+  contents: write
 
 jobs:
   check:
@@ -13,3 +17,16 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - run: nix develop -c just lint
       - run: nix develop -c just test
+      - run: nix develop -c just dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg
+          path: build/*.dmg
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(nix develop -c just --evaluate VERSION)
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "tag $GITHUB_REF_NAME does not match VERSION $version"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" "build/Pixeldish-$version.dmg" --verify-tag --generate-notes
