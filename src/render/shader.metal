@@ -309,6 +309,25 @@ fragment float4 pipesFrag(PipeVOut in [[stage_in]],
 
 // ---------------------------------------------------------------- shapes
 
+// value noise with a quintic fade: continuous curvature, so a mirror shows no seams
+static inline float vnoise5(float2 p) {
+    float2 i = floor(p), f = fract(p);
+    float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    return mix(mix(hash21(i), hash21(i + float2(1.0, 0.0)), u.x),
+               mix(hash21(i + float2(0.0, 1.0)), hash21(i + float2(1.0, 1.0)), u.x), u.y);
+}
+static inline float fbm2s(float2 p) {
+    return (vnoise5(p) * 0.6 + vnoise5(float2(p.x * 1.7 - p.y * 1.1, p.x * 1.1 + p.y * 1.7)) * 0.4);
+}
+
+// a slow liquid surface: broad noise warped twice by itself, each layer on its own slow orbit
+static inline float mercH(float2 p, float time, float warp) {
+    float w = 1.4 + 1.6 * warp;
+    float2 q = float2(fbm2s(p + loop(0.7, time * 0.013)), fbm2s(p + float2(6.1, 2.4) - loop(0.9, time * 0.011)));
+    float2 r = float2(fbm2s(p + w * q + float2(3.7, 8.2)), fbm2s(p + w * q + float2(9.4, 1.6) + loop(0.8, time * 0.009)));
+    return fbm2s(p + w * r);
+}
+
 static float fieldOf(int shape, float2 uv, float seed, float warp, float time, float4 p0, float4 p1, float2 kt)
 {
     float2 g = seedPan(seed);
@@ -654,6 +673,154 @@ static float fieldOf(int shape, float2 uv, float seed, float warp, float time, f
     }
     case 19:
         return 0.0; // rendered in the 3D pipes pre-pass into `trace`
+    case 20: {  // drape: satin in overlapping folds, a sheen across each, a lit hem, a shadow under it
+        float2 p = rot((k.z - 0.5) * 1.2) * uv + drift * loop(2.0, time * 0.03);
+        float v = 0.06;
+        for (int i = 0; i < 5; ++i) {
+            float fi = float(i);
+            float x = p.x * mix(1.2, 2.2, hash21(g + fi * 7.3)) + fi * 1.9 + g.x;
+            float hem = -0.95 + fi * 0.42 + 0.18 * sin(x + hand * time * (0.08 + 0.03 * fi))
+                      + (fbm3(float2(x * 0.7, fi + time * 0.02)) - 0.5) * (0.3 + 0.6 * warp);
+            float d = p.y - hem;   // y grows downward, the cloth hangs below its hem
+            if (d < 0.0) { v *= 1.0 - 0.5 * exp(d * 30.0); continue; }
+            float sheen = 0.5 + 0.5 * sin(x * 2.3 + d * 3.0 - time * 0.1 + fi);
+            v = 0.2 + 0.55 * exp(-d * 1.5) * (0.4 + 0.6 * sheen * sheen) + 0.35 * exp(-d * 60.0);
+        }
+        return saturate(v);
+    }
+    case 21: {  // mercury: liquid metal, broad slow swells mirroring a soft studio
+        float2 p = g + rot(0.4) * uv * mix(0.3, 0.42, k.x);
+        const float e = 0.003;
+        float h = mercH(p, time, warp);
+        float2 grad = float2(mercH(p + float2(e, 0.0), time, warp) - h, mercH(p + float2(0.0, e), time, warp) - h) / e;
+        float3 n = normalize(float3(-grad * 0.5, 1.0));
+        float3 r = float3(2.0 * n.z * n.xy, 2.0 * n.z * n.z - 1.0);
+        float2x2 turn = rot(k.w * 6.2831853);
+        float3 key = normalize(float3(turn * float2(-0.5, -0.6), 0.6));
+        float3 fill = normalize(float3(turn * float2(0.6, 0.3), 0.5));
+        float sky = sstep((dot(r, key) + 0.3) * 0.8);
+        float ring = exp(-pow(length(r.xy) - 0.65, 2.0) * 400.0);
+        float lit = 0.04 + 0.9 * sky * sqrt(sky) + 0.25 * ring * sky
+                  + 1.1 * pow(saturate(dot(r, key)), 50.0) + 0.4 * pow(saturate(dot(r, fill)), 40.0);
+        // troughs see less of the room
+        return saturate(lit * (0.55 + 0.45 * saturate(h * 1.8 - 0.35)));
+    }
+    case 22: {  // tyndall: shafts of light fanning in from a corner through dusty air
+        float2 o = float2(k.w < 0.5 ? -1.9 : 1.9, -1.25 + 0.3 * k.y);
+        float2 d = uv - o;
+        float r = length(d);
+        float2 q = rot(hand * time * 0.01) * (d / r);
+        float shaft = fbm3(q * mix(6.0, 10.0, k.x) + g + float2(0.0, time * 0.04));
+        shaft = pow(saturate((shaft - 0.25) * (1.6 + warp)), 1.5);
+        float dust = fbm3(uv * 3.0 + g + loop(2.0, time * 0.05));
+        return saturate(exp(-max(r - 0.8, 0.0) * 0.45) * (0.15 + 1.1 * shaft * (0.7 + 0.6 * dust)) + 0.03);
+    }
+    case 23: {  // corona: a total eclipse, the corona breathing round the moon's rim
+        float2 p = uv - (k.xy - 0.5) * float2(1.2, 0.5);
+        float R = 0.36 + 0.06 * k.w + 0.008 * sin(time * 0.4);
+        float r = length(p);
+        if (r < R) return 0.015;
+        float2 dir = p / r;
+        float x = r - R;
+        float st = fbm3(rot(hand * time * 0.004) * dir * 2.5 + g + float2(0.0, x * 1.2 - time * 0.03));
+        float corona = exp(-x * mix(9.0, 4.0, st) / (0.6 + warp));
+        // the last bead of sun showing at the rim: the diamond ring, on some seeds
+        float2 bd = p - R * float2(cos(k.z * 6.2831853), sin(k.z * 6.2831853));
+        float bead = step(0.5, k.y) * exp(-dot(bd, bd) * 900.0);
+        return saturate(0.03 + 0.8 * corona * (0.5 + 0.8 * st) + 0.5 * exp(-x * 90.0) + bead);
+    }
+    case 24: {  // streamer: one ribbon of light turning over itself across a dark frame
+        float2 p = rot((k.z - 0.5) * 0.9) * uv;
+        float x = p.x * mix(0.9, 1.4, k.x) + g.x;
+        float c = 0.32 * sin(x * 1.1 + hand * time * 0.07) + 0.12 * sin(x * 2.3 + g.y - time * 0.05);
+        float tw = x * mix(1.2, 2.2, k.y) + hand * time * 0.1 + warp * 1.5 * sin(x * 0.7);
+        float w = 0.16 * cos(tw);   // the half-width passes through zero where the ribbon flips
+        float d = abs(p.y - c), aw = abs(w);
+        if (d > aw) return saturate(0.03 + 0.25 * exp(-(d - aw) * 10.0) * aw / 0.16);
+        float across = d / max(aw, 1e-4);
+        float face = w > 0.0 ? 0.55 + 0.45 * aw / 0.16 : 0.3 + 0.2 * aw / 0.16;
+        return saturate(face * (0.6 + 0.4 * (1.0 - across * across)) + 0.4 * exp(-(aw - d) * 60.0));
+    }
+    case 25: {  // borealis: aurora curtains rising off the horizon into a starry sky
+        float2 sc = floor((uv + g) * 90.0);
+        float star = step(0.996, hash21(sc)) * hash21(sc + 3.1) * (0.35 + 0.15 * sin(time * 2.0 + hash21(sc + 7.7) * 40.0));
+        float v = 0.0;
+        for (int i = 0; i < 2; ++i) {
+            float fi = float(i);
+            float x = uv.x * (1.0 + 0.5 * fi) + g.x + fi * 3.7;
+            float foot = 0.45 + 0.25 * fi - 0.3 * fbm3(float2(x * 0.5, time * 0.03 + fi));
+            float pleat = fbm3(float2(x * 7.0 + (fbm3(float2(x, time * 0.05)) - 0.5) * (1.0 + 3.0 * warp),
+                                      time * 0.08 + fi * 5.0));
+            float hgt = foot - uv.y;
+            float body = hgt > 0.0 ? exp(-hgt * mix(1.2, 2.5, k.x)) : exp(hgt * 25.0);
+            v = max(v, body * (0.25 + 0.9 * pleat * pleat) * (1.0 - 0.35 * fi));
+        }
+        return saturate(v + star * (1.0 - v) + 0.02);
+    }
+    case 26: {  // pulsar: a burst of rays wheeling slowly round a white-hot core
+        float2 p = uv - (k.xy - 0.5) * float2(1.0, 0.6);
+        float r = length(p);
+        float2 q = rot(hand * time * 0.03) * (p / max(r, 1e-4));
+        float rays = pow(saturate(fbm3(q * mix(5.0, 9.0, k.w) + g) * 1.4 - 0.25), 3.0) * (0.6 + 0.4 * vnoise(q * 40.0 + g));
+        return saturate(exp(-r * r * 60.0) + 0.35 * exp(-r * 3.0) + rays * (1.2 + warp) / (1.0 + r * 3.0));
+    }
+    case 27: {  // limelight: one streaked cone of light thrown down from above, dust in the beam
+        float2 src = float2((k.x - 0.5) * 1.4, -1.4);
+        float2 d = uv - src;
+        float ang = atan2(d.x, d.y) - (k.y - 0.5) * 0.3;   // 0 is straight down
+        float spread = mix(0.22, 0.34, k.w);
+        float cone = sstep((spread - abs(ang)) / 0.08);
+        float streak = fbm3(float2(ang * mix(18.0, 30.0, k.z), time * 0.05) + g);
+        if (uv.y > 0.8) {   // the pool where the cone meets the floor
+            float2 c = float2(src.x + 2.2 * tan((k.y - 0.5) * 0.3), 0.86);
+            float2 e = (uv - c) / float2(2.2 * tan(spread), 0.08);
+            return saturate(0.04 + 0.7 * exp(-dot(e, e) * 1.5));
+        }
+        float2 mp = uv * 30.0 + float2(0.0, time * 0.3) + g, mf = fract(mp) - 0.5;
+        float mote = step(0.97, hash21(floor(mp))) * exp(-dot(mf, mf) * 40.0);
+        float beam = cone * ((0.3 + 0.7 * streak * streak) * exp(-length(d) * 0.35) * (0.8 + 0.4 * warp) + 0.5 * mote);
+        return saturate(beam + 0.03);
+    }
+    case 28: {  // shutter: a beam of colour dragged across the frame, smeared like a long exposure
+        float2 p = rot((k.z - 0.5) * 1.4) * uv;
+        float c = 0.3 * sin(p.x * mix(0.8, 1.4, k.x) + g.x + hand * time * 0.05) + 0.1 * sin(p.x * 2.7 + g.y);
+        float w = 0.1 + 0.08 * sin(p.x * 0.9 + g.y + time * 0.04);
+        float d = (p.y - c) / w;
+        float strands = vnoise(float2(p.x * 0.6 - time * 0.05, d * 6.0 + g.y));
+        float head = sstep((p.x * hand + 1.6) / 3.2);   // brighter where the light ended up
+        float beam = exp(-d * d) * (0.35 + 0.65 * strands) * (0.25 + 0.75 * head);
+        return saturate(beam * (1.0 + 0.5 * warp) + 0.12 * exp(-abs(d) * 0.8) + 0.02);
+    }
+    case 29: {  // limb: the edge of a giant planet lit from behind, a thin crest of atmosphere
+        float R = mix(1.6, 2.6, k.x);
+        float2 up = rot((k.z - 0.5) * 2.0) * float2(0.0, -1.0);
+        float2 p = uv + up * (R + 0.35);
+        float r = length(p);
+        float2 lxy = rot((k.w - 0.5) * 1.2 + 0.1 * sin(time * 0.02)) * up;
+        float3 l = normalize(float3(lxy, -0.45));
+        float facing = saturate(dot(p / r, lxy));
+        float x = r - R;
+        if (x < 0.0) {
+            float3 n = float3(p / R, sqrt(max(1.0 - r * r / (R * R), 0.0)));
+            float bands = fbm3(float2(dot(p, up) * 9.0, dot(p, float2(-up.y, up.x)) * 0.8 + time * 0.01) + g);
+            return saturate(max(dot(n, l), 0.0) * (0.55 + 0.5 * bands) * (1.5 + warp) + 0.45 * facing * exp(x * 40.0) + 0.02);
+        }
+        float2 sc = floor((uv + g) * 80.0);
+        float star = step(0.995, hash21(sc)) * 0.3 * hash21(sc + 1.3);
+        return saturate(exp(-x * 18.0) * (0.1 + 0.6 * facing) + 0.5 * facing * exp(-x * 90.0) + star + 0.01);
+    }
+    case 30: {  // luxfer: glass blocks lit from behind by slow soft glows
+        float2 p = g + uv * mix(4.0, 7.0, k.x);
+        float2 cell = floor(p), f = fract(p) - 0.5;
+        // each block is a pillow lens, so the glow behind it is seen bent and magnified
+        float2 lens = f * (0.6 + 0.6 * warp) * (1.0 - dot(f, f));
+        float glow = sstep((fbm3((cell + 0.5 + lens) * 0.25 + drift * loop(2.0, time * 0.04)) - 0.35) * 2.5);
+        float edge = max(abs(f.x), abs(f.y));
+        float grout = sstep((edge - 0.44) * 25.0);
+        float bevel = sstep((edge - 0.34) * 10.0) * (1.0 - grout) * saturate(0.5 - f.x - f.y);
+        float ribs = 0.9 + 0.1 * cos(f.x * 40.0);
+        return saturate(mix(glow * ribs * 0.85 + 0.06, 0.03, grout) + 0.3 * bevel * glow);
+    }
     }
 }
 

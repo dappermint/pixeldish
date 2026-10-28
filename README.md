@@ -11,9 +11,10 @@ in Swift and Metal. It has no dock icon and no dependencies.
 
 ## Features
 
-- 20 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
+- 31 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
   vortex, sweep, glitch, twill, belts, circuit, julia, kali, torus, kerr, binary,
-  cygnus, pipes
+  cygnus, pipes, drape, mercury, tyndall, corona, streamer, borealis, pulsar,
+  limelight, shutter, limb, luxfer
 - kerr ray traces a Kerr null geodesic per pixel onto a Page-Thorne disk with
   g^4 beaming; the selftest checks the shadow against Bardeen's analytic edge.
   binary superposes two Schwarzschild lenses, cygnus is a hole fed by a

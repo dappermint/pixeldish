@@ -7,7 +7,9 @@ import UniformTypeIdentifiers
 let kShapeNames = [
     "Drift", "Shepard", "Sines", "Fringe", "Curtain", "Voronoi",
     "Contour", "Vortex", "Sweep", "Glitch", "Twill", "Belts", "Circuit",
-    "Julia", "Kali", "Torus", "Kerr", "Binary", "Cygnus", "Pipes"
+    "Julia", "Kali", "Torus", "Kerr", "Binary", "Cygnus", "Pipes",
+    "Drape", "Mercury", "Tyndall", "Corona", "Streamer", "Borealis",
+    "Pulsar", "Limelight", "Shutter", "Limb", "Luxfer"
 ]
 let kDitherNames = [
     "Smooth", "Poster", "Bayer 4", "Bayer 8", "Noise",
