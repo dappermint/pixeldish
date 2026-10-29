@@ -191,7 +191,7 @@ func kerrChecks(_ dev: MTLDevice) -> [(String, Bool)] {
     let hits: [(Double, Double, Double, Double, Float, Float)] = [
         (0, 85, 6, 1.5, 4.8542860, 2.8061451), (0, 85, -9, -0.5, 10.3742584, -1.0033095),
         (0, 60, 2, 4, 2.5099834, 2.8966140), (0.998, 85, 6, 1.5, 3.1639828, 2.3874096),
-        (0.9, 60, -3, 2, 2.3675227, -3.0048412),
+        (0.9, 60, -3, 2, 2.3675227, -3.0048412)
     ]
     for (a, deg, x, y, r, phi) in hits {
         let q = SIMD4(Float(a), Float(deg * .pi / 180), Float(x), Float(y))
