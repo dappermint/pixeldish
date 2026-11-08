@@ -41,9 +41,9 @@ func runSelftest() -> Bool {
         check("kerr retraces when a knob moves", warm != nil && warm == cold)
     }
 
-    check("shape names", kShapeNames.count == 31)
+    check("shape names", kShapeNames.count == 33)
     if let r {
-        for (name, ok) in kerrChecks(r.device) + pipesChecks(r) {
+        for (name, ok) in kerrChecks(r.device) + pipesChecks(r) + particleChecks(r) {
             check(name, ok)
         }
     }

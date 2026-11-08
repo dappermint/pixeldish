@@ -11,20 +11,28 @@ in Swift and Metal. It has no dock icon and no dependencies.
 
 ## Features
 
-- 31 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
+- 33 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
   vortex, sweep, glitch, twill, belts, circuit, julia, kali, torus, kerr, binary,
   cygnus, pipes, drape, mercury, tyndall, corona, streamer, borealis, pulsar,
-  limelight, shutter, limb, luxfer
+  limelight, shutter, limb, luxfer, protodisk, magnetar
 - kerr ray traces a Kerr null geodesic per pixel onto a Page-Thorne disk with
   g^4 beaming; the selftest checks the shadow against Bardeen's analytic edge.
   binary superposes two Schwarzschild lenses, cygnus is a hole fed by a
   Roche-lobe-filling supergiant
+- protodisk and magnetar are GPU particle sims. protodisk drags dust toward
+  sub-Keplerian gas with pressure bumps, so grains that grow drift in and get
+  trapped into rings while an embedded planet carves its own gap; magnetar runs
+  plasma along the loops of a tilted, spinning dipole and periodically blows the
+  flaring loops open. The particle count follows the pixel count, so the density
+  knob costs the same on any display
 - per-shape knobs: torus size, thickness, tumble, chase and windings; kerr spin
   (0 is Schwarzschild), inclination, mass, disk temperature and radius; binary
   mass ratio, separation, inclination, orbit speed, disk temperature; cygnus
   star mass, inclination, orbit speed, stream, disk temperature; pipes pipe
   radius, joint style (elbows, mixed, spheres), grid scale, travel speed and
-  highlight shine. On the black holes warp is disk turbulence
+  highlight shine; protodisk inclination, pressure rings, planet mass, grain
+  growth and particle density; magnetar inclination, obliquity, loops, flare
+  period and particle density. On the black holes warp is disk turbulence
 - patterns with ids: every look has a UUID derived from its content, so the same
   picture has the same id on any machine. Copy pattern / Paste pattern move it
   as one line of KYAML
@@ -40,8 +48,8 @@ in Swift and Metal. It has no dock icon and no dependencies.
   Mode
 - shuffle every hour
 - hyper: demo mode that draws at the display's top refresh rate (120 Hz on
-  ProMotion); pipes defaults to 60 fps (frame rate slider, 15 to 120) and drops
-  as windows cover more of the display
+  ProMotion); pipes, protodisk and magnetar default to 60 fps (frame rate
+  slider, 15 to 120) and drop as windows cover more of the display
 - live animated desktop layer on every display, or a still frame
 - use a photo as the source image
 - export a PNG for each display

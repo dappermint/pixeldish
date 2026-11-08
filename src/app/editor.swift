@@ -68,7 +68,7 @@ struct EditorView: View {
                     ForEach(shapeParams(shape), id: \.key) { p in
                         ParamSlider(param: p, key: paramKey(shape, p)).id(paramKey(shape, p))
                     }
-                    if shapeName(shape) == "Pipes" {
+                    if shapeName(shape) == "Pipes" || kParticleShapes.contains(shape) {
                         slider("Frame rate", $fps, "fps", format: "%.0f")
                             .help("drops with how much of the display windows cover; hyper ignores it")
                     }

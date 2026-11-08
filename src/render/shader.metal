@@ -354,6 +354,151 @@ fragment float4 pipesFrag(PipeVOut in [[stage_in]],
     return float4(field, in.mat, 0.0, 1.0);
 }
 
+// ---------------------------------------------------------------- particles
+// protodisk and magnetar are stateful: particlesSim moves them, particlesVert
+// splats them additively into an r16Float density that fmain tone maps into the field
+
+struct Particle { float4 pos; float4 vel; };
+struct ParticleUniforms {
+    float4x4 viewProj;
+    float time, dt, gain, pointSize;
+    float4 shp0, shp1;
+    uint shape, frame, steps, reset;
+};
+
+static inline uint pcg(uint v) {
+    uint s = v * 747796405u + 2891336453u;
+    uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+static inline float rnd(thread uint &s) { s = pcg(s); return float(s) * (1.0 / 4294967296.0); }
+
+constant float kRStar = 0.22;
+
+// pos.w = grain size seed, vel.w = age
+static Particle spawnDisk(thread uint &s) {
+    float r = mix(0.4, 2.8, rnd(s));
+    float a = rnd(s) * 6.2831853;
+    float h = 0.06 * r * (rnd(s) + rnd(s) + rnd(s) - 1.5);
+    return { float4(r * cos(a), h, r * sin(a), rnd(s)), float4(float3(-sin(a), 0, cos(a)) * rsqrt(r), 0) };
+}
+
+static inline float3 planetPos(float t) { const float a = 1.72; float w = rsqrt(a * a * a); return float3(a * cos(w * t), 0, a * sin(w * t)); }
+
+// p0: inclination, rings, planet mass (1e-3), growth
+static void stepDisk(thread Particle &P, thread uint &s, constant ParticleUniforms &u, float t) {
+    float3 p = P.pos.xyz, v = P.vel.xyz;
+    float r = length(p);
+    float3 acc = -p / (r * r * r);
+    float3 d = planetPos(t) - p;
+    acc += u.shp0.z * 1e-3 * d * pow(dot(d, d) + 0.0025, -1.5);
+    v += acc * u.dt;
+
+    // dust drags toward sub-Keplerian gas whose pressure bumps every 0.38 trap
+    // the grown grains into rings; tiny grains stay coupled and fill the gaps
+    float rc = max(length(p.xz), 1e-3);
+    float3 rh = float3(p.x, 0, p.z) / rc;
+    float vk = rsqrt(rc);
+    const float k = 6.2831853 / 0.38;
+    float rdlnP = -2.75 - 0.7 * u.shp0.y * k * rc * sin(k * rc);
+    float3 vgas = float3(-rh.z, 0, rh.x) * vk * sqrt(max(1.0 + 0.03 * rdlnP, 0.0));
+    float St = 0.02 + 2.0 * P.pos.w * P.pos.w * min(P.vel.w * 0.05 * u.shp0.w, 1.0);
+    v = vgas + (v - vgas) * exp(-u.dt * vk / (rc * St));
+    v += (float3(rnd(s), rnd(s), rnd(s)) - 0.5) * 0.015 * vk * sqrt(u.dt);
+
+    p += v * u.dt;
+    P.pos.xyz = p;
+    P.vel = float4(v, P.vel.w + u.dt);
+    float rn = length(p.xz);
+    if (rn < 0.3 || rn > 3.2 || abs(p.y) > 1.0 || P.vel.w > 120.0) P = spawnDisk(s);
+}
+
+static inline float3 dipoleAxis(float t, float chi) { return float3(sin(chi) * cos(0.8 * t), cos(chi), sin(chi) * sin(0.8 * t)); }
+static inline float3 dipoleDir(float3 p, float3 m) { float3 n = normalize(p); return normalize(3.0 * dot(m, n) * n - m); }
+static inline float flareAt(float t, float period) { return exp(-fmod(t + 4.0, period) * 1.8); }
+
+// pos.w = loop bundle, vel.x = sits in the flaring region, vel.y = speed along the line,
+// vel.z = 1 for the few that make up the crust. p0: inclination, obliquity, loops, flare period
+static Particle spawnMagnetar(thread uint &s, constant ParticleUniforms &u, float t) {
+    if (rnd(s) < 0.08) {
+        float z = 2.0 * rnd(s) - 1.0, a = rnd(s) * 6.2831853, q = sqrt(1.0 - z * z);
+        return { float4(kRStar * float3(q * cos(a), z, q * sin(a)), 0.5), float4(0, 0, 1, rnd(s) * 6.0) };
+    }
+    float loops = max(u.shp0.z, 1.0);
+    float bundle = floor(rnd(s) * loops);
+    uint bs = uint(bundle) * 7919u + 17u;
+    float rmax = mix(0.35, 2.2, pow(rnd(bs), 2.0));
+    float theta = asin(sqrt(kRStar / rmax)) + (rnd(s) - 0.5) * 0.03;
+    float ph = rnd(bs) * 6.2831853 + (rnd(s) - 0.5) * 0.06;
+    float active = rnd(bs) < 0.2 ? 1.0 : 0.0;
+    float3 m = dipoleAxis(t, u.shp0.y * (M_PI_F / 180.0));
+    float3 e1 = normalize(cross(m, float3(0, 0, 1)));
+    float3 e2 = cross(m, e1);
+    float3 p = 1.01 * kRStar * (sin(theta) * (cos(ph) * e1 + sin(ph) * e2) + cos(theta) * m);
+    return { float4(p, bundle / loops), float4(active, mix(1.2, 2.5, rnd(s)), 0, 0) };
+}
+
+static void stepMagnetar(thread Particle &P, thread uint &s, constant ParticleUniforms &u, float t) {
+    float3 m = dipoleAxis(t, u.shp0.y * (M_PI_F / 180.0));
+    float3 p = P.pos.xyz;
+    if (P.vel.z > 0.5) {
+        P.pos.xz = rot(-0.8 * u.dt) * p.xz;
+        P.vel.w += u.dt;
+        if (P.vel.w > 6.0) P = spawnMagnetar(s, u, t);
+        return;
+    }
+    float h = P.vel.y * u.dt;
+    p += h * dipoleDir(p + 0.5 * h * dipoleDir(p, m), m);
+    p += normalize(p) * P.vel.x * flareAt(t, u.shp0.w) * 2.5 * u.dt;
+    P.pos.xyz = p;
+    P.vel.w += u.dt;
+    float r = length(p);
+    if ((r < kRStar && P.vel.w > 0.05) || r > 3.5 || P.vel.w > 6.0) P = spawnMagnetar(s, u, t);
+}
+
+kernel void particlesSim(device Particle *ps [[buffer(0)]], constant ParticleUniforms &u [[buffer(1)]],
+                         uint id [[thread_position_in_grid]]) {
+    uint s = pcg(id ^ pcg(u.frame));
+    bool disk = u.shape == 0;
+    Particle P = ps[id];
+    uint n = u.steps;
+    if (u.reset != 0) {
+        P = disk ? spawnDisk(s) : spawnMagnetar(s, u, u.time);
+        if (!disk) n = uint(rnd(s) * float(n));   // spread the loops' phases
+    }
+    for (uint i = 0; i < n; ++i) {
+        float t = u.time + float(i) * u.dt;
+        if (disk) stepDisk(P, s, u, t); else stepMagnetar(P, s, u, t);
+    }
+    ps[id] = P;
+}
+
+struct ParticleVOut { float4 pos [[position]]; float size [[point_size]]; float glow; };
+
+vertex ParticleVOut particlesVert(uint vid [[vertex_id]], device const Particle *ps [[buffer(0)]],
+                                  constant ParticleUniforms &u [[buffer(1)]]) {
+    Particle P = ps[vid];
+    ParticleVOut o;
+    o.pos = u.viewProj * float4(P.pos.xyz, 1.0);
+    float size;
+    if (u.shape == 0) {
+        o.glow = mix(1.6, 0.6, saturate((length(P.pos.xz) - 0.4) / 2.4));
+        size = 1.0 + P.pos.w;
+    } else {
+        float act = P.vel.x * flareAt(u.time, u.shp0.w);
+        o.glow = (1.0 + 6.0 * act) * (0.6 + 0.8 * fract(P.pos.w * 13.7)) * (1.0 + saturate(2.0 * kRStar / length(P.pos.xyz)));
+        size = 1.0 + 2.0 * act;
+    }
+    o.glow *= u.gain;
+    o.size = clamp(u.pointSize * size / o.pos.w, 1.0, 24.0);
+    return o;
+}
+
+fragment float4 particlesFrag(ParticleVOut in [[stage_in]], float2 pc [[point_coord]]) {
+    float2 c = pc * 2.0 - 1.0;
+    return float4(in.glow * exp(-3.0 * dot(c, c)), 0, 0, 0);
+}
+
 // ---------------------------------------------------------------- shapes
 
 // value noise with a quintic fade: continuous curvature, so a mirror shows no seams
@@ -1008,6 +1153,8 @@ fragment float4 fmain(float4 pos [[position]],
             float2 pt = trace.read(uint2(uv)).xy;
             field = pt.x;
             pipeMat = int(pt.y + 0.5);
+        } else if (shape == 31 || shape == 32) {
+            field = 1.0 - exp(-trace.read(uint2(uv)).x);
         } else {
             float2 kt = shape == 16 ? trace.read(uint2(uv)).xy : 0.0;
             field = fieldOf(shape, screenUV(uv, u), u.misc.x, u.tune.x, u.misc.z, u.shp[0], u.shp[1], kt);

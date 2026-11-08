@@ -9,7 +9,7 @@ let kShapeNames = [
     "Contour", "Vortex", "Sweep", "Glitch", "Twill", "Belts", "Circuit",
     "Julia", "Kali", "Torus", "Kerr", "Binary", "Cygnus", "Pipes",
     "Drape", "Mercury", "Tyndall", "Corona", "Streamer", "Borealis",
-    "Pulsar", "Limelight", "Shutter", "Limb", "Luxfer"
+    "Pulsar", "Limelight", "Shutter", "Limb", "Luxfer", "Protodisk", "Magnetar"
 ]
 let kDitherNames = [
     "Smooth", "Poster", "Bayer 4", "Bayer 8", "Noise",
@@ -58,19 +58,33 @@ let kShapeParams: [String: [ShapeParam]] = [
         ShapeParam(key: "scale", label: "Grid scale", range: 0.5 ... 2.0, def: 1),
         ShapeParam(key: "speed", label: "Travel speed", range: 0 ... 3, def: 1),
         ShapeParam(key: "shine", label: "Highlight", range: 0.2 ... 2.5, def: 1.2)
+    ],
+    "Protodisk": [
+        ShapeParam(key: "inclination", label: "Inclination", range: 0 ... 85, def: 60),
+        ShapeParam(key: "rings", label: "Pressure rings", range: 0 ... 1, def: 0.5),
+        ShapeParam(key: "planet", label: "Planet mass", range: 0 ... 4, def: 2),
+        ShapeParam(key: "growth", label: "Grain growth", range: 0 ... 3, def: 1),
+        ShapeParam(key: "density", label: "Particle density", range: 0.01 ... 0.3, def: 0.15)
+    ],
+    "Magnetar": [
+        ShapeParam(key: "inclination", label: "Inclination", range: 0 ... 90, def: 75),
+        ShapeParam(key: "obliquity", label: "Obliquity", range: 0 ... 80, def: 25),
+        ShapeParam(key: "loops", label: "Loops", range: 8 ... 160, def: 48),
+        ShapeParam(key: "flare", label: "Flare period", range: 3 ... 20, def: 7),
+        ShapeParam(key: "density", label: "Particle density", range: 0.01 ... 0.3, def: 0.2)
     ]
 ]
 
 func shapeName(_ i: Int) -> String { kShapeNames[min(max(i, 0), kShapeNames.count - 1)] }
 func shapeParams(_ shape: Int) -> [ShapeParam] { kShapeParams[shapeName(shape)] ?? [] }
 func paramKey(_ shape: Int, _ p: ShapeParam) -> String { "\(shapeName(shape).lowercased()).\(p.key)" }
-// pipes follows the fps slider, scaled by the share of the display windows leave
+// pipes and the particle shapes follow the fps slider, scaled by the share of the display windows leave
 // visible; the per-pixel shapes stay on the 20 Hz timer and hyper overrides both
 func targetFPS(
     shape: Int, isPhoto: Bool, hyper: Bool, fps: Double = 60, visible: Double = 1, maxFPS: Int = 120
 ) -> Int {
     if hyper { return maxFPS }
-    guard !isPhoto, shape == kShapeNames.firstIndex(of: "Pipes") else { return 20 }
+    guard !isPhoto, shape == kShapeNames.firstIndex(of: "Pipes") || kParticleShapes.contains(shape) else { return 20 }
     let f = min(max(fps, 15), Double(maxFPS)) * min(max(visible, 0), 1)
     return max(10, Int((f / 5).rounded()) * 5)
 }
@@ -179,6 +193,7 @@ final class DishRenderer: NSObject, MTKViewDelegate {
     let pipeline: MTLRenderPipelineState
     let tracer: MTLRenderPipelineState
     let pipes: PipeDrawer
+    let particles: ParticleDrawer
     var atlas: MTLTexture?
     var photo: MTLTexture?
     // Kerr's geodesics never depend on the clock, only on these, so they are
@@ -216,11 +231,13 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         pd.fragmentFunction = kf
         pd.colorAttachments[0].pixelFormat = .rg32Float
         guard let t = try? dev.makeRenderPipelineState(descriptor: pd),
-              let pw = PipeDrawer(dev: dev, lib: lib)
+              let pw = PipeDrawer(dev: dev, lib: lib),
+              let pa = ParticleDrawer(dev: dev, lib: lib)
         else { return nil }
         pipeline = p
         tracer = t
         pipes = pw
+        particles = pa
         super.init()
         atlas = makeRampAtlas(dev)
     }
@@ -240,6 +257,14 @@ final class DishRenderer: NSObject, MTKViewDelegate {
 
     func retrace(_ cb: MTLCommandBuffer, _ u: Uniforms) {
         let shape = Int(u.look.x)
+        if kParticleShapes.contains(shape), u.view.w < 0.5 {
+            trace = nil
+            traceKey = []
+            pipes.clear()
+            particles.encode(cb, u)
+            return
+        }
+        particles.clear()
         let isKerr = shape == kShapeNames.firstIndex(of: "Kerr")
         let isPipes = shape == kShapeNames.firstIndex(of: "Pipes")
         guard isKerr || isPipes, u.view.w < 0.5 else {
@@ -278,7 +303,7 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
         enc.setFragmentTexture(photo, index: 0)
         enc.setFragmentTexture(atlas, index: 1)
-        enc.setFragmentTexture(trace, index: 2)
+        enc.setFragmentTexture(particles.density ?? trace, index: 2)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
         return true
