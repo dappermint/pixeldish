@@ -61,9 +61,9 @@ let kShapeParams: [String: [ShapeParam]] = [
     ],
     "Protodisk": [
         ShapeParam(key: "inclination", label: "Inclination", range: 0 ... 85, def: 60),
-        ShapeParam(key: "rings", label: "Pressure rings", range: 0 ... 1, def: 0.5),
-        ShapeParam(key: "planet", label: "Planet mass", range: 0 ... 4, def: 2),
-        ShapeParam(key: "growth", label: "Grain growth", range: 0 ... 3, def: 1),
+        ShapeParam(key: "mass", label: "Disk mass", range: 0 ... 0.3, def: 0.15),
+        ShapeParam(key: "planet", label: "Planet mass", range: 0 ... 4, def: 1),
+        ShapeParam(key: "cooling", label: "Cooling time", range: 1 ... 12, def: 5),
         ShapeParam(key: "density", label: "Particle density", range: 0.01 ... 0.3, def: 0.15)
     ],
     "Magnetar": [

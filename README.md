@@ -19,9 +19,10 @@ in Swift and Metal. It has no dock icon and no dependencies.
   g^4 beaming; the selftest checks the shadow against Bardeen's analytic edge.
   binary superposes two Schwarzschild lenses, cygnus is a hole fed by a
   Roche-lobe-filling supergiant
-- protodisk and magnetar are GPU particle sims. protodisk drags dust toward
-  sub-Keplerian gas with pressure bumps, so grains that grow drift in and get
-  trapped into rings while an embedded planet carves its own gap; magnetar runs
+- protodisk and magnetar are GPU particle sims. protodisk is a physics sandbox:
+  every step the grains deposit on a grid that gives back the disk's own gravity
+  and pressure, three planets orbit as a live n-body system, and the spiral arms,
+  wakes and clumps are whatever those forces make; magnetar runs
   plasma along the loops of a tilted, spinning dipole and periodically blows the
   flaring loops open. The particle count follows the pixel count, so the density
   knob costs the same on any display
@@ -30,8 +31,8 @@ in Swift and Metal. It has no dock icon and no dependencies.
   mass ratio, separation, inclination, orbit speed, disk temperature; cygnus
   star mass, inclination, orbit speed, stream, disk temperature; pipes pipe
   radius, joint style (elbows, mixed, spheres), grid scale, travel speed and
-  highlight shine; protodisk inclination, pressure rings, planet mass, grain
-  growth and particle density; magnetar inclination, obliquity, loops, flare
+  highlight shine; protodisk inclination, disk mass, planet mass, cooling
+  time and particle density; magnetar inclination, obliquity, loops, flare
   period and particle density. On the black holes warp is disk turbulence
 - patterns with ids: every look has a UUID derived from its content, so the same
   picture has the same id on any machine. Copy pattern / Paste pattern move it
