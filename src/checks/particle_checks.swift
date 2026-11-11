@@ -37,7 +37,7 @@ func particleChecks(_ r: DishRenderer) -> [(String, Bool)] {
         let gain = Double(redStats(big).mean - black) / Double(max(redStats(small).mean - black, 1))
         out.append((
             "\(name) exposure holds across display sizes (x\(String(format: "%.2f", gain)))",
-            gain > 0.6 && gain < 1.5
+            gain > 0.65 && gain < 1.25
         ))
         out.append(("\(name) star sits at the view centre", big[((h / 2) * w + w / 2) * 4] > 200))
         var jump = 0, lit = 0
