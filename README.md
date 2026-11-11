@@ -7,6 +7,8 @@ in Swift and Metal. It has no dock icon and no dependencies.
   <img src="assets/cells.gif" width="32%" alt="Voronoi shape, Bayer 8 dither, Iris palette, animated">
   <img src="assets/circuit.gif" width="32%" alt="Circuit shape, Bayer 8 dither, Dracula palette, animated">
   <img src="assets/pipes.gif" width="32%" alt="Pipes shape, Bayer 8 dither, Van Helsing palette, animated">
+  <img src="assets/protodisk.gif" width="32%" alt="Protodisk shape, Bayer 8 dither, Ember palette, animated">
+  <img src="assets/magnetar.gif" width="32%" alt="Magnetar shape, Bayer 8 dither, Mocha palette, animated">
 </p>
 
 ## Features
