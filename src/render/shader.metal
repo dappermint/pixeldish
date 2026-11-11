@@ -363,8 +363,8 @@ struct ParticleUniforms {
     float4x4 viewProj;
     float4 eye;
     float time, dt, gain, deposit;
+    float seed;
     float4 shp0, shp1;
-    float4 planets[3];  // x, z, mass
     uint shape, frame, steps, reset;
 };
 
@@ -378,72 +378,130 @@ static inline float rnd(thread uint &s) { s = pcg(s); return float(s) * (1.0 / 4
 constant float kRStar = 0.22;
 
 // ---- protodisk: a self-gravitating particle disk, G = M_star = 1.
-// every step the grains deposit their count and momentum on a grid; the grid gives back
-// self-gravity and pressure, and the kernel adds the star and the planets. nothing here
-// draws a ring, a gap or an arm: whatever shows up, the forces made
+// every step the gas grains deposit their count, momentum and position on a grid; the
+// grid gives back self-gravity and pressure, and the kernels add the star and the planets.
+// nothing here draws a ring, a gap or an arm: whatever shows up, the forces made
 
 constant float kDiskL = 3.6;        // the grid spans -L..L
 constant float kDiskArea = 24.13;   // pi (2.8^2 - 0.4^2), the area the grains are spread over
 constant float kDiskH = 0.1;        // c_s / v_k
 constant float kDiskLife = 120.0;
 
-struct DepositOut { float4 pos [[position]]; float size [[point_size]]; float3 m; };
+struct Body { float2 pos, vel; float home, share; float2 pad; };
+
+// dust is a share of the grains picked by index. it feels gravity and the drag of the gas
+// but not the pressure, so it drifts to wherever the gas pressure peaks.
+// ponytail: dust is massless here, it does not pull or push back on the gas
+static inline bool diskIsDust(uint id, float share) { return float(id % 64u) < 64.0 * share; }
+
+struct DepositOut { float4 pos [[position]]; float size [[point_size]]; float3 m; float2 x; };
+struct DepositFrag { float4 grid [[color(0)]]; float4 moment [[color(1)]]; };
 
 vertex DepositOut diskDepositVert(uint vid [[vertex_id]], device const Particle *ps [[buffer(0)]],
                                   constant ParticleUniforms &u [[buffer(1)]]) {
     Particle P = ps[vid];
-    return { float4(P.pos.x / kDiskL, -P.pos.z / kDiskL, 0.0, 1.0), 1.0, float3(1.0, P.vel.xz) };
+    float4 at = diskIsDust(vid, u.shp1.y) ? float4(2.0, 2.0, 2.0, 1.0) : float4(P.pos.x / kDiskL, -P.pos.z / kDiskL, 0.0, 1.0);
+    return { at, 1.0, float3(1.0, P.vel.xz), P.pos.xz };
 }
 
-fragment float4 diskDepositFrag(DepositOut in [[stage_in]]) { return float4(in.m, 0.0); }
-
-static inline float diskLnSigma(texture2d<float> grid, float2 uv, float norm) {
-    constexpr sampler lin(filter::linear, mip_filter::nearest, address::clamp_to_edge);
-    return log(max(grid.sample(lin, uv, level(2.0)).x * norm, 0.0075));
+fragment DepositFrag diskDepositFrag(DepositOut in [[stage_in]]) {
+    return { float4(in.m, 0.0), float4(in.x, 0.0, 0.0) };
 }
 
-// xy = acceleration from the disk itself, zw = the local mean velocity.
-// a thin disk's gravity is a softened 1/r^2 sum over every cell (not a 2D Poisson solve).
-// each mip level adds the cells its parent's neighbours hold that the finer levels have
-// not counted, as point masses at their centres, so every cell is counted exactly once.
-// ponytail: a cell's mass sits at its centre, not its centre of mass, so one lone clump's far
-// pull is off by up to ~20% in direction; deposit the first moments too if clumps have to
-// orbit each other accurately
-fragment float4 diskField(float4 pos [[position]], constant ParticleUniforms &u [[buffer(0)]],
-                          texture2d<float> grid [[texture(0)]]) {
-    constexpr sampler lin(filter::linear, mip_filter::nearest, address::clamp_to_edge);
-    // u.deposit = 1 / grain count: one grain's share of the disk mass
+// the pull of the disk at x, per unit of grain count. a thin disk's gravity is a softened
+// 1/r^2 sum over every cell (not a 2D Poisson solve). each mip level adds the cells its
+// parent's neighbours hold that the finer levels have not counted, as point masses at their
+// centres of mass, so every cell is counted exactly once. `cut` fades out what lies within
+// that distance: a planet must not be dragged about by the clump bound to it
+static float2 diskGravity(texture2d<float> grid, texture2d<float> moment, float2 x, float cut) {
     int cells = int(grid.get_width());
-    float dx = 2.0 * kDiskL / float(cells), norm = u.deposit * kDiskArea / (dx * dx);
-    int2 c = int2(pos.xy);
-    float2 x = pos.xy * dx - kDiskL, g = 0.0;
+    float dx = 2.0 * kDiskL / float(cells);
+    int2 c = clamp(int2(floor((x + kDiskL) / dx)), 0, cells - 1);
+    float2 g = 0.0;
     for (int l = 0; (cells >> l) >= 4; ++l) {
         int n = cells >> l;
         int2 ci = c >> l;
-        float s = dx * float(1 << l);
         for (int dj = -3; dj <= 3; ++dj) {
             for (int di = -3; di <= 3; ++di) {
                 int2 si = ci + int2(di, dj);
                 bool near = max(abs(di), abs(dj)) <= 1;
                 if (l > 0 ? near : (di == 0 && dj == 0)) continue;
                 if (any(si < 0) || any(si >= n) || any(abs((si >> 1) - (ci >> 1)) > 1)) continue;
-                float2 d = (float2(si) + 0.5) * s - kDiskL - x;
-                g += grid.read(uint2(si), l).x * float(1 << (2 * l)) * d * pow(dot(d, d) + 0.0016, -1.5);
+                float m = grid.read(uint2(si), l).x;
+                if (m <= 0.0) continue;
+                float2 d = moment.read(uint2(si), l).xy / m - x;
+                float d2 = dot(d, d);
+                g += m * float(1 << (2 * l)) * d * pow(d2 + 0.0016, -1.5) * (cut > 0.0 ? 1.0 - exp(-d2 / (cut * cut)) : 1.0);
             }
         }
     }
-    g *= u.shp0.y * u.deposit;
-
-    // isothermal pressure, from the density smoothed over a few cells
-    float2 uv = pos.xy / float(cells), e = float2(2.0 / float(cells), 0.0);
-    float2 grad = float2(diskLnSigma(grid, uv + e.xy, norm) - diskLnSigma(grid, uv - e.xy, norm),
-                         diskLnSigma(grid, uv + e.yx, norm) - diskLnSigma(grid, uv - e.yx, norm)) / (4.0 * dx);
-    g -= kDiskH * kDiskH / max(length(x), 0.2) * grad;
-    float3 m = grid.sample(lin, uv, level(2.0)).xyz;
-    return float4(g, m.yz / max(m.x, 1e-6));
+    return g;
 }
 
-// pos.w = sprite size seed, vel.w = age
+static inline float diskLnSigma(texture2d<float> grid, float2 uv, float norm) {
+    constexpr sampler lin(filter::linear, mip_filter::nearest, address::clamp_to_edge);
+    return log(max(grid.sample(lin, uv, level(2.0)).x * norm, 0.0075));
+}
+
+// a.xy = the disk's gravity, a.zw = the mean gas velocity, p.xy = the gas pressure force
+struct FieldOut { float4 a [[color(0)]]; float4 p [[color(1)]]; };
+
+fragment FieldOut diskField(float4 pos [[position]], constant ParticleUniforms &u [[buffer(0)]],
+                            texture2d<float> grid [[texture(0)]], texture2d<float> moment [[texture(1)]]) {
+    constexpr sampler lin(filter::linear, mip_filter::nearest, address::clamp_to_edge);
+    // u.deposit = 1 / gas grain count: one grain's share of the disk mass
+    float cells = float(grid.get_width());
+    float dx = 2.0 * kDiskL / cells, norm = u.deposit * kDiskArea / (dx * dx);
+    float2 x = pos.xy * dx - kDiskL;
+    float2 g = diskGravity(grid, moment, x, 0.0) * u.shp0.y * u.deposit;
+
+    // isothermal pressure, from the density smoothed over a few cells
+    float2 uv = pos.xy / cells, e = float2(2.0 / cells, 0.0);
+    float2 grad = float2(diskLnSigma(grid, uv + e.xy, norm) - diskLnSigma(grid, uv - e.xy, norm),
+                         diskLnSigma(grid, uv + e.yx, norm) - diskLnSigma(grid, uv - e.yx, norm)) / (4.0 * dx);
+    float3 m = grid.sample(lin, uv, level(2.0)).xyz;
+    return { float4(g, m.yz / max(m.x, 1e-6)), float4(-kDiskH * kDiskH / max(length(x), 0.2) * grad, 0.0, 0.0) };
+}
+
+// the planets are a live n-body system: they pull on each other, feel the star and the
+// disk, and every grain feels them. reset 1 seeds one planet per band of the disk
+kernel void diskBodies(device Body *bs [[buffer(0)]], constant ParticleUniforms &u [[buffer(1)]],
+                       texture2d<float> grid [[texture(0)]], texture2d<float> moment [[texture(1)]]) {
+    if (u.reset == 1) {
+        for (int i = 0; i < 3; ++i) {
+            float3 h = fract(u.seed * float3(0.731, 0.417, 0.293) + float(i) * 0.618);
+            float a = 0.75 + 0.675 * float(i) + 0.35 * h.x, ph = 6.2831853 * h.z;
+            bs[i] = { a * float2(cos(ph), sin(ph)), float2(-sin(ph), cos(ph)) * rsqrt(a), a, 0.4 + h.y, 0.0 };
+        }
+        return;
+    }
+    float2 acc[3];
+    for (int i = 0; i < 3; ++i) {
+        float2 x = bs[i].pos;
+        float r = length(x), mass = u.shp0.z * 1e-3 * bs[i].share;
+        acc[i] = -x / (r * r * r);
+        for (int j = 0; j < 3; ++j) {
+            float2 d = bs[j].pos - x;
+            if (j != i) acc[i] += u.shp0.z * 1e-3 * bs[j].share * d * pow(dot(d, d) + 1e-4, -1.5);
+        }
+        // nothing inside 0.6 Hill radii pulls on the planet
+        acc[i] += u.shp0.y * u.deposit * diskGravity(grid, moment, x, 0.6 * r * pow(mass / 3.0, 1.0 / 3.0));
+    }
+    for (int i = 0; i < 3; ++i) {
+        Body b = bs[i];
+        b.vel += acc[i] * u.dt;
+        b.pos += b.vel * u.dt;
+        // a planet that leaves the disk starts over, or a wallpaper left running ends up with none
+        float r = length(b.pos);
+        if (r < 0.35 || r > 3.2) {
+            b.pos *= b.home / r;
+            b.vel = float2(-b.pos.y, b.pos.x) * pow(b.home, -1.5);
+        }
+        bs[i] = b;
+    }
+}
+
+// pos.w = sprite size and grain size seed, vel.w = age
 static Particle spawnDisk(thread uint &s) {
     float r = mix(0.4, 2.8, rnd(s));
     float a = rnd(s) * 6.2831853;
@@ -451,17 +509,19 @@ static Particle spawnDisk(thread uint &s) {
     return { float4(r * cos(a), h, r * sin(a), rnd(s)), float4(0.0) };
 }
 
-// the speed that balances the star and the disk's own field at x
+// the speed that balances the star and the disk's own forces at x
 static inline float2 diskCircular(float2 x, float2 fieldAcc) {
     float r = length(x);
     float2 rh = x / r;
     return float2(-rh.y, rh.x) * sqrt(max(r * (1.0 / (r * r) - dot(fieldAcc, rh)), 0.0));
 }
 
-// p0: inclination, disk mass, planet mass (1e-3), cooling time in orbits / 2 pi.
+// p0: inclination, disk mass, planet mass (1e-3), cooling time in orbits / 2 pi. p1: density, dust share.
 // reset 1 scatters the grains, reset 2 puts them on circular orbits once the field exists
 kernel void diskSim(device Particle *ps [[buffer(0)]], constant ParticleUniforms &u [[buffer(1)]],
-                    texture2d<float> field [[texture(0)]], uint id [[thread_position_in_grid]]) {
+                    device const Body *bs [[buffer(2)]],
+                    texture2d<float> field [[texture(0)]], texture2d<float> press [[texture(1)]],
+                    uint id [[thread_position_in_grid]]) {
     constexpr sampler lin(filter::linear, address::clamp_to_edge);
     uint s = pcg(id ^ pcg(u.frame));
     Particle P = ps[id];
@@ -471,39 +531,52 @@ kernel void diskSim(device Particle *ps [[buffer(0)]], constant ParticleUniforms
         ps[id] = P;
         return;
     }
-    float2 x = P.pos.xz;
+    bool dust = diskIsDust(id, u.shp1.y);
+    float2 x = P.pos.xz, uv = x / (2.0 * kDiskL) + 0.5;
     float r = max(length(x), 1e-3);
-    float4 f = field.sample(lin, x / (2.0 * kDiskL) + 0.5, level(0.0));
+    float4 f = field.sample(lin, uv, level(0.0));
+    // only the gas has pressure
+    float2 own = dust ? f.xy : f.xy + press.sample(lin, uv, level(0.0)).xy;
     if (u.reset == 2) {
-        P.vel.xz = diskCircular(x, f.xy);
+        P.vel.xz = diskCircular(x, own);
         ps[id] = P;
         return;
     }
-    float om = pow(r, -1.5), cool = om / max(u.shp0.w, 0.1);
-    float2 acc = f.xy - x / (r * r * r);
+    float om = pow(r, -1.5);
+    float2 acc = own - x / (r * r * r);
     float accY = -P.pos.y * om * om;
     for (int i = 0; i < 3; ++i) {
-        float3 d = float3(u.planets[i].x, 0.0, u.planets[i].y) - P.pos.xyz;
-        float pull = u.planets[i].z * pow(dot(d, d) + 9e-4, -1.5);
+        float3 d = float3(bs[i].pos.x, 0.0, bs[i].pos.y) - P.pos.xyz;
+        float pull = u.shp0.z * 1e-3 * bs[i].share * pow(dot(d, d) + 9e-4, -1.5);
         acc += pull * d.xz;
         accY += pull * d.y;
     }
-    // cooling: the grain's own motion relaxes toward the local mean flow
+    // gas cools: its own motion relaxes toward the local mean flow. dust is dragged to that
+    // same flow in its stopping time, which grows as the grain does
+    float stokes = 0.03 + P.pos.w * P.pos.w * min(P.vel.w / 30.0, 1.0);
+    float rate = om / (dust ? stokes : max(u.shp0.w, 0.1));
+    // the grid's velocities are a step old and the flow has turned since. dragging toward
+    // the stale direction pushes every grain outward, faster than the dust drifts in
+    float turn = (x.x * f.w - x.y * f.z) / (r * r) * u.dt;
+    float2 flow = float2(f.z * cos(turn) - f.w * sin(turn), f.z * sin(turn) + f.w * cos(turn));
     float2 v = P.vel.xz + acc * u.dt;
-    v += (f.zw - v) * (1.0 - exp(-u.dt * cool));
-    // vertically the star and the planets pull the grain to the midplane, cooling damps
-    // it and stirring keeps the disk about 0.03 r thick.
+    v += (flow - v) * (1.0 - exp(-u.dt * rate));
+    // vertically the star and the planets pull the grain to the midplane, the drag damps
+    // it and stirring keeps the gas about 0.03 r thick, the dust thinner.
     // ponytail: the disk's own gravity is in-plane only, so a clump that forms away
     // from a planet stays as tall as the disk around it
-    float vy = (P.vel.y + accY * u.dt) * exp(-u.dt * cool);
-    vy += (rnd(s) - 0.5) * 0.03 * r * om * sqrt(24.0 * cool * u.dt);
+    float vy = (P.vel.y + accY * u.dt) * exp(-u.dt * rate);
+    vy += (rnd(s) - 0.5) * (dust ? 0.012 : 0.03) * r * om * sqrt(24.0 * rate * u.dt);
     P.pos.xyz += float3(v.x, vy, v.y) * u.dt;
     P.vel = float4(v.x, vy, v.y, P.vel.w + u.dt);
 
     float rn = length(P.pos.xz);
     if (rn < 0.3 || rn > 3.3 || P.vel.w > kDiskLife) {
         P = spawnDisk(s);
-        P.vel.xz = diskCircular(P.pos.xz, field.sample(lin, P.pos.xz / (2.0 * kDiskL) + 0.5, level(0.0)).xy);
+        uv = P.pos.xz / (2.0 * kDiskL) + 0.5;
+        own = field.sample(lin, uv, level(0.0)).xy;
+        if (!dust) own += press.sample(lin, uv, level(0.0)).xy;
+        P.vel.xz = diskCircular(P.pos.xz, own);
     }
     ps[id] = P;
 }
@@ -572,8 +645,9 @@ vertex ParticleVOut particlesVert(uint vid [[vertex_id]], device const Particle 
     o.pos = u.viewProj * float4(P.pos.xyz, 1.0);
     float size;
     if (u.shape == 0) {
-        o.glow = mix(1.6, 0.6, saturate((length(P.pos.xz) - 0.4) / 2.4));
-        size = 1.0 + P.pos.w;
+        bool dust = diskIsDust(vid, u.shp1.y);
+        o.glow = mix(1.6, 0.6, saturate((length(P.pos.xz) - 0.4) / 2.4)) * (dust ? 2.5 : 1.0);
+        size = dust ? 1.0 : 1.0 + P.pos.w;
     } else {
         float act = P.vel.x * flareAt(u.time, u.shp0.w);
         o.glow = (1.0 + 6.0 * act) * (0.6 + 0.8 * fract(P.pos.w * 13.7)) * (1.0 + saturate(2.0 * kRStar / length(P.pos.xyz)));

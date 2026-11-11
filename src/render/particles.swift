@@ -5,58 +5,9 @@ struct ParticleUniforms {
     var viewProj = matrix_identity_float4x4
     var eye: SIMD4<Float> = .zero
     var time: Float = 0, dt: Float = 0, gain: Float = 0, deposit: Float = 0
+    var seed: Float = 0
     var shp0: SIMD4<Float> = .zero, shp1: SIMD4<Float> = .zero
-    var planets: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero)
     var shape: UInt32 = 0, frame: UInt32 = 0, steps: UInt32 = 0, reset: UInt32 = 0
-}
-
-// the protodisk's planets are a live n-body system: they pull on each other and on every
-// grain, with the star pinned at the origin.
-// ponytail: nothing pulls back on them, so they neither migrate nor accrete; feed the
-// grid's force back to them when that is wanted
-struct DiskBodies {
-    var pos = [SIMD2<Double>](repeating: .zero, count: 3), vel = [SIMD2<Double>](repeating: .zero, count: 3)
-    var home = [Double](repeating: 1, count: 3), share = [Double](repeating: 1, count: 3)
-
-    // the seed puts one planet in each band of the disk and picks its share of the mass knob
-    init(seed: Float = 0) {
-        for i in 0 ..< 3 {
-            func hash(_ k: Double) -> Double {
-                (Double(seed) * k + Double(i) * 0.618).truncatingRemainder(dividingBy: 1)
-            }
-            home[i] = 0.75 + 0.675 * Double(i) + 0.35 * hash(0.731)
-            share[i] = 0.4 + hash(0.417)
-            orbit(i, phase: 2 * .pi * hash(0.293))
-        }
-    }
-
-    private mutating func orbit(_ i: Int, phase: Double) {
-        pos[i] = home[i] * SIMD2(cos(phase), sin(phase))
-        vel[i] = SIMD2(-sin(phase), cos(phase)) / home[i].squareRoot()
-    }
-
-    mutating func step(_ dt: Double, mass: Double) {
-        var acc = pos.map { -$0 / pow(length_squared($0), 1.5) }
-        for a in 0 ..< 3 {
-            for b in 0 ..< 3 where a != b {
-                let d = pos[b] - pos[a]
-                acc[a] += mass * 1e-3 * share[b] * d / pow(length_squared(d) + 1e-4, 1.5)
-            }
-        }
-        for i in 0 ..< 3 {
-            vel[i] += acc[i] * dt
-            pos[i] += vel[i] * dt
-            // a planet scattered out of the disk starts over, or a wallpaper left running ends up with none
-            if !(0.35 ... 3.2).contains(length(pos[i])) { orbit(i, phase: atan2(pos[i].y, pos[i].x)) }
-        }
-    }
-
-    func uniforms(mass: Float) -> (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) {
-        func one(_ i: Int) -> SIMD4<Float> {
-            SIMD4(Float(pos[i].x), Float(pos[i].y), mass * 1e-3 * Float(share[i]), 0)
-        }
-        return (one(0), one(1), one(2))
-    }
 }
 
 let kParticleShapes = ["Protodisk", "Magnetar"].compactMap { kShapeNames.firstIndex(of: $0) }
@@ -64,15 +15,19 @@ let kParticleShapes = ["Protodisk", "Magnetar"].compactMap { kShapeNames.firstIn
 // sim time runs at 0.6 units a second, so the disk's r = 1 orbit takes ~10 s at speed 1
 final class ParticleDrawer {
     let device: MTLDevice
-    let sim: MTLComputePipelineState, simDisk: MTLComputePipelineState
+    let sim: MTLComputePipelineState, simDisk: MTLComputePipelineState, simBodies: MTLComputePipelineState
     let draw: MTLRenderPipelineState, deposit: MTLRenderPipelineState, fieldPass: MTLRenderPipelineState
     let gridFormat: MTLPixelFormat
     var particles: MTLBuffer?
     var density: MTLTexture?
-    // the disk's grid: grain count and momentum per cell, and the field the grains read back
+    // the disk's grid: gas count and momentum per cell, the positions summed per cell, and the
+    // gravity and pressure the grains read back
     var grid: MTLTexture?
+    var moment: MTLTexture?
     var field: MTLTexture?
-    var bodies = DiskBodies()
+    var press: MTLTexture?
+    // three planets, 32 bytes each: position, velocity, home radius, share of the mass knob
+    var bodies: MTLBuffer?
     // steps a cold disk runs before its first frame, so a still or an export is not a
     // featureless disk; it keeps forming live after that
     var warm = 200
@@ -86,7 +41,9 @@ final class ParticleDrawer {
         guard let kf = lib.makeFunction(name: "particlesSim"),
               let s = try? dev.makeComputePipelineState(function: kf),
               let df = lib.makeFunction(name: "diskSim"),
-              let sd = try? dev.makeComputePipelineState(function: df)
+              let sd = try? dev.makeComputePipelineState(function: df),
+              let bf = lib.makeFunction(name: "diskBodies"),
+              let sb = try? dev.makeComputePipelineState(function: bf)
         else { return nil }
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "particlesVert")
@@ -101,16 +58,25 @@ final class ParticleDrawer {
         gridFormat = dev.supports32BitFloatFiltering ? .rgba32Float : .rgba16Float
         pd.vertexFunction = lib.makeFunction(name: "diskDepositVert")
         pd.fragmentFunction = lib.makeFunction(name: "diskDepositFrag")
-        ca.pixelFormat = gridFormat
+        let cb: MTLRenderPipelineColorAttachmentDescriptor = pd.colorAttachments[1]
+        for c in [ca, cb] {
+            c.pixelFormat = gridFormat
+            c.isBlendingEnabled = true
+            c.sourceRGBBlendFactor = .one
+            c.destinationRGBBlendFactor = .one
+        }
         guard let dep = try? dev.makeRenderPipelineState(descriptor: pd) else { return nil }
         pd.vertexFunction = lib.makeFunction(name: "vmain")
         pd.fragmentFunction = lib.makeFunction(name: "diskField")
-        ca.pixelFormat = .rgba16Float
-        ca.isBlendingEnabled = false
+        for c in [ca, cb] {
+            c.pixelFormat = .rgba16Float
+            c.isBlendingEnabled = false
+        }
         guard let fp = try? dev.makeRenderPipelineState(descriptor: pd) else { return nil }
         device = dev
         sim = s
         simDisk = sd
+        simBodies = sb
         draw = d
         deposit = dep
         fieldPass = fp
@@ -120,7 +86,10 @@ final class ParticleDrawer {
         particles = nil
         density = nil
         grid = nil
+        moment = nil
         field = nil
+        press = nil
+        bodies = nil
         key = []
     }
 
@@ -141,7 +110,8 @@ final class ParticleDrawer {
         // sprites keep their size in pixels and every particle deposits the same total,
         // so the exposure and the grain per pixel are the same on any display
         pu.gain = (isDisk ? 0.6 : 0.45) / u.shp.1.x
-        pu.deposit = 1 / Float(count)
+        pu.deposit = 1 / (Float(count) * (1 - u.shp.1.y))
+        pu.seed = u.misc.x
 
         // the other knobs act on the running sim, so dragging one reshapes it live
         let newKey = [u.look.x, u.misc.x, Float(count)]
@@ -195,66 +165,15 @@ final class ParticleDrawer {
         }
     }
 
-    // scatter the grains, build the field once so they can start on circular orbits, then
-    // run the warm-up.
-    // ponytail: every step is four passes, so the cold start grows with `warm`; spread it
-    // over a few frames if it ever shows as a hitch
-    private func coldDisk(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms, _ count: Int, seed: Float) {
-        bodies = DiskBodies(seed: seed)
-        dispatch(cb, &pu, count, seed: seed)
-        fieldPasses(cb, &pu, count)
-        pu.reset = 2
-        dispatch(cb, &pu, count, seed: seed)
-        pu.reset = 0
-        pu.dt = 0.015
-        for _ in 0 ..< warm {
-            diskStep(cb, &pu, count, seed: seed)
-        }
-    }
-
-    // one step of the disk: the planets move, the grains deposit on the grid, the grid turns
-    // into the field, and the grains move in it
-    private func diskStep(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms, _ count: Int, seed: Float) {
-        bodies.step(Double(pu.dt), mass: Double(pu.shp0.z))
-        pu.planets = bodies.uniforms(mass: pu.shp0.z)
-        fieldPasses(cb, &pu, count)
-        dispatch(cb, &pu, count, seed: seed)
-    }
-
-    func fieldPasses(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms, _ count: Int) {
-        guard let grid, let field else { return }
-        let rp = MTLRenderPassDescriptor()
-        rp.colorAttachments[0].texture = grid
-        rp.colorAttachments[0].loadAction = .clear
-        rp.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        rp.colorAttachments[0].storeAction = .store
-        guard let dep = cb.makeRenderCommandEncoder(descriptor: rp) else { return }
-        dep.setRenderPipelineState(deposit)
-        dep.setVertexBuffer(particles, offset: 0, index: 0)
-        dep.setVertexBytes(&pu, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
-        dep.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
-        dep.endEncoding()
-        if let blit = cb.makeBlitCommandEncoder() {
-            blit.generateMipmaps(for: grid)
-            blit.endEncoding()
-        }
-        rp.colorAttachments[0].texture = field
-        rp.colorAttachments[0].loadAction = .dontCare
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: rp) else { return }
-        enc.setRenderPipelineState(fieldPass)
-        enc.setFragmentBytes(&pu, length: MemoryLayout<ParticleUniforms>.stride, index: 0)
-        enc.setFragmentTexture(grid, index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        enc.endEncoding()
-    }
-
     private func dispatch(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms, _ count: Int, seed: Float) {
         guard let enc = cb.makeComputeCommandEncoder() else { return }
         frame &+= 1
         pu.frame = frame &+ seed.bitPattern &* 2_654_435_761
         enc.setComputePipelineState(pu.shape == 0 ? simDisk : sim)
         enc.setTexture(field, index: 0)
+        enc.setTexture(press, index: 1)
         enc.setBuffer(particles, offset: 0, index: 0)
+        enc.setBuffer(bodies, offset: 0, index: 2)
         enc.setBytes(&pu, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
         enc.dispatchThreads(
             MTLSize(width: count, height: 1, depth: 1),
@@ -284,12 +203,15 @@ final class ParticleDrawer {
             )
             gd.usage = [.renderTarget, .shaderRead]
             grid = device.makeTexture(descriptor: gd)
+            moment = device.makeTexture(descriptor: gd)
             gd.pixelFormat = .rgba16Float
             gd.mipmapLevelCount = 1
             field = device.makeTexture(descriptor: gd)
+            press = device.makeTexture(descriptor: gd)
+            bodies = device.makeBuffer(length: 96, options: .storageModeShared)
         }
         frame = 0
-        return particles != nil && density != nil && (!isDisk || (grid != nil && field != nil))
+        return particles != nil && density != nil && (!isDisk || (press != nil && bodies != nil))
     }
 
     // inclination is the tilt of the view off the disk's axis or the star's spin axis;
@@ -312,5 +234,80 @@ final class ParticleDrawer {
             SIMD4(fx, 0, 0, 0), SIMD4(0, fy, 0, 0), SIMD4(0, 0, -0.01, -1), SIMD4(0, 0, 1, 0)
         ))
         return (proj * view, eye, fy / dist)
+    }
+}
+
+extension ParticleDrawer {
+    // scatter the grains, build the field once so they can start on circular orbits, then
+    // run the warm-up.
+    // ponytail: every step is four passes, so the cold start grows with `warm`; spread it
+    // over a few frames if it ever shows as a hitch
+    private func coldDisk(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms, _ count: Int, seed: Float) {
+        moveBodies(cb, &pu)
+        dispatch(cb, &pu, count, seed: seed)
+        fieldPasses(cb, &pu, count)
+        pu.reset = 2
+        dispatch(cb, &pu, count, seed: seed)
+        pu.reset = 0
+        pu.dt = 0.015
+        for _ in 0 ..< warm {
+            diskStep(cb, &pu, count, seed: seed)
+        }
+    }
+
+    // one step of the disk: the gas deposits on the grid, the grid turns into the field, then
+    // the grains and the planets move in it. the grains go first so both see the other where
+    // it was at the start of the step: grains chasing a planet that has already moved pile up
+    // ahead of it and tow it outward
+    private func diskStep(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms, _ count: Int, seed: Float) {
+        fieldPasses(cb, &pu, count)
+        dispatch(cb, &pu, count, seed: seed)
+        moveBodies(cb, &pu)
+    }
+
+    func moveBodies(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms) {
+        guard let enc = cb.makeComputeCommandEncoder() else { return }
+        enc.setComputePipelineState(simBodies)
+        enc.setBuffer(bodies, offset: 0, index: 0)
+        enc.setBytes(&pu, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
+        enc.setTexture(grid, index: 0)
+        enc.setTexture(moment, index: 1)
+        enc.dispatchThreads(
+            MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1)
+        )
+        enc.endEncoding()
+    }
+
+    func fieldPasses(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms, _ count: Int) {
+        guard let grid, let moment, let field, let press else { return }
+        let rp = MTLRenderPassDescriptor()
+        for (i, tex) in [grid, moment].enumerated() {
+            rp.colorAttachments[i].texture = tex
+            rp.colorAttachments[i].loadAction = .clear
+            rp.colorAttachments[i].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            rp.colorAttachments[i].storeAction = .store
+        }
+        guard let dep = cb.makeRenderCommandEncoder(descriptor: rp) else { return }
+        dep.setRenderPipelineState(deposit)
+        dep.setVertexBuffer(particles, offset: 0, index: 0)
+        dep.setVertexBytes(&pu, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
+        dep.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
+        dep.endEncoding()
+        if let blit = cb.makeBlitCommandEncoder() {
+            blit.generateMipmaps(for: grid)
+            blit.generateMipmaps(for: moment)
+            blit.endEncoding()
+        }
+        for (i, tex) in [field, press].enumerated() {
+            rp.colorAttachments[i].texture = tex
+            rp.colorAttachments[i].loadAction = .dontCare
+        }
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rp) else { return }
+        enc.setRenderPipelineState(fieldPass)
+        enc.setFragmentBytes(&pu, length: MemoryLayout<ParticleUniforms>.stride, index: 0)
+        enc.setFragmentTexture(grid, index: 0)
+        enc.setFragmentTexture(moment, index: 1)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
     }
 }
