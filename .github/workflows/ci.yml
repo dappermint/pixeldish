@@ -13,12 +13,12 @@ jobs:
   check:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@main
       - run: nix develop -c just lint
       - run: nix develop -c just test
       - run: nix develop -c just dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dmg
           path: build/*.dmg
