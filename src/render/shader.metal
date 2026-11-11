@@ -361,6 +361,7 @@ fragment float4 pipesFrag(PipeVOut in [[stage_in]],
 struct Particle { float4 pos; float4 vel; };
 struct ParticleUniforms {
     float4x4 viewProj;
+    float4 eye;
     float time, dt, gain, pointSize;
     float4 shp0, shp1;
     uint shape, frame, steps, reset;
@@ -417,13 +418,9 @@ static inline float3 dipoleAxis(float t, float chi) { return float3(sin(chi) * c
 static inline float3 dipoleDir(float3 p, float3 m) { float3 n = normalize(p); return normalize(3.0 * dot(m, n) * n - m); }
 static inline float flareAt(float t, float period) { return exp(-fmod(t + 4.0, period) * 1.8); }
 
-// pos.w = loop bundle, vel.x = sits in the flaring region, vel.y = speed along the line,
-// vel.z = 1 for the few that make up the crust. p0: inclination, obliquity, loops, flare period
+// pos.w = loop bundle, vel.x = sits in the flaring region, vel.y = speed along the line.
+// p0: inclination, obliquity, loops, flare period
 static Particle spawnMagnetar(thread uint &s, constant ParticleUniforms &u, float t) {
-    if (rnd(s) < 0.08) {
-        float z = 2.0 * rnd(s) - 1.0, a = rnd(s) * 6.2831853, q = sqrt(1.0 - z * z);
-        return { float4(kRStar * float3(q * cos(a), z, q * sin(a)), 0.5), float4(0, 0, 1, rnd(s) * 6.0) };
-    }
     float loops = max(u.shp0.z, 1.0);
     float bundle = floor(rnd(s) * loops);
     uint bs = uint(bundle) * 7919u + 17u;
@@ -441,12 +438,6 @@ static Particle spawnMagnetar(thread uint &s, constant ParticleUniforms &u, floa
 static void stepMagnetar(thread Particle &P, thread uint &s, constant ParticleUniforms &u, float t) {
     float3 m = dipoleAxis(t, u.shp0.y * (M_PI_F / 180.0));
     float3 p = P.pos.xyz;
-    if (P.vel.z > 0.5) {
-        P.pos.xz = rot(-0.8 * u.dt) * p.xz;
-        P.vel.w += u.dt;
-        if (P.vel.w > 6.0) P = spawnMagnetar(s, u, t);
-        return;
-    }
     float h = P.vel.y * u.dt;
     p += h * dipoleDir(p + 0.5 * h * dipoleDir(p, m), m);
     p += normalize(p) * P.vel.x * flareAt(t, u.shp0.w) * 2.5 * u.dt;
@@ -475,6 +466,15 @@ kernel void particlesSim(device Particle *ps [[buffer(0)]], constant ParticleUni
 
 struct ParticleVOut { float4 pos [[position]]; float size [[point_size]]; float glow; };
 
+// the line of sight enters the star before it reaches p
+static inline bool behindStar(float3 p, float3 eye) {
+    float3 d = p - eye;
+    float len = length(d);
+    d /= len;
+    float tca = -dot(eye, d), h2 = kRStar * kRStar - (dot(eye, eye) - tca * tca);
+    return h2 > 0.0 && len > tca - sqrt(h2);
+}
+
 vertex ParticleVOut particlesVert(uint vid [[vertex_id]], device const Particle *ps [[buffer(0)]],
                                   constant ParticleUniforms &u [[buffer(1)]]) {
     Particle P = ps[vid];
@@ -489,14 +489,55 @@ vertex ParticleVOut particlesVert(uint vid [[vertex_id]], device const Particle 
         o.glow = (1.0 + 6.0 * act) * (0.6 + 0.8 * fract(P.pos.w * 13.7)) * (1.0 + saturate(2.0 * kRStar / length(P.pos.xyz)));
         size = 1.0 + 2.0 * act;
     }
-    o.glow *= u.gain;
     o.size = clamp(u.pointSize * size / o.pos.w, 1.0, 24.0);
+    o.glow *= u.gain / (o.size * o.size);
+    if (u.shape != 0 && behindStar(P.pos.xyz, u.eye.xyz)) o.pos = float4(2.0, 2.0, 2.0, 1.0);
     return o;
 }
 
 fragment float4 particlesFrag(ParticleVOut in [[stage_in]], float2 pc [[point_coord]]) {
     float2 c = pc * 2.0 - 1.0;
     return float4(in.glow * exp(-3.0 * dot(c, c)), 0, 0, 0);
+}
+
+// cubic B-spline through four bilinear taps: plain bilinear upsampling of a coarse mip
+// shows its texel grid as stair steps wherever a bright ring borders an empty gap
+static float mipSmooth(texture2d<float> t, float2 p, uint l) {
+    constexpr sampler smp(filter::linear, mip_filter::nearest, address::clamp_to_edge);
+    float2 size = float2(t.get_width(l), t.get_height(l));
+    float2 st = p * size - 0.5, i = floor(st), f = st - i;
+    float2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f), w3 = f * f * f;
+    float2 w1 = 4.0 - 6.0 * f * f + 3.0 * w3, w2 = 6.0 - w0 - w1 - w3;
+    float2 g0 = (w0 + w1) / 6.0, g1 = (w2 + w3) / 6.0;
+    float2 h0 = (i - 0.5 + w1 / (w0 + w1)) / size, h1 = (i + 1.5 + w3 / (w2 + w3)) / size;
+    return g0.y * (g0.x * t.sample(smp, float2(h0.x, h0.y), level(l)).x + g1.x * t.sample(smp, float2(h1.x, h0.y), level(l)).x)
+         + g1.y * (g0.x * t.sample(smp, float2(h0.x, h1.y), level(l)).x + g1.x * t.sample(smp, float2(h1.x, h1.y), level(l)).x);
+}
+
+// density to field. where a pixel holds less than a few grains' worth, the density comes
+// from the footprint that does hold that much (k / its area, a nearest-neighbour estimate),
+// so sparse regions turn into haze while rings and loop cores stay sharp
+static float particleField(texture2d<float> dens, float2 uv, float2 res, bool magnetar, float pxPerUnit) {
+    const float k = 6.0;
+    float2 p = uv / res;
+    uint top = min(5u, dens.get_num_mip_levels() - 1u);
+    float d = dens.read(uint2(uv)).x, m = d;
+    for (uint l = 1u; l <= top && m < k; ++l) {
+        float dn = mipSmooth(dens, p, l), mn = dn * exp2(2.0 * float(l));
+        float t = saturate(log(k / max(m, 1e-6)) / max(log(mn / max(m, 1e-6)), 1e-6));
+        d = mn < k ? dn : k * exp2(-2.0 * (float(l - 1u) + t));
+        m = mn;
+    }
+    // the camera looks at the origin, so the star sits at the centre of the view
+    float r = length(uv - 0.5 * res) / max(pxPerUnit, 1e-3);
+    if (magnetar) {
+        float q = r / kRStar, qh = max(q, 1.0);
+        float disc = 1.1 * exp2(2.9 * sqrt(saturate(1.0 - q * q)));
+        d += mix(0.3 / (qh * qh * qh), disc, saturate((1.0 - q) * kRStar * pxPerUnit + 0.5));
+    } else {
+        d += 12.0 * pow(1.0 + r * r / 0.0016, -1.5);
+    }
+    return saturate(log2(1.0 + 8.0 * d) / log2(1.0 + 8.0 * 12.0));
 }
 
 // ---------------------------------------------------------------- shapes
@@ -1154,7 +1195,7 @@ fragment float4 fmain(float4 pos [[position]],
             field = pt.x;
             pipeMat = int(pt.y + 0.5);
         } else if (shape == 31 || shape == 32) {
-            field = 1.0 - exp(-trace.read(uint2(uv)).x);
+            field = particleField(trace, uv, res, shape == 32, u.shp[1].w);
         } else {
             float2 kt = shape == 16 ? trace.read(uint2(uv)).xy : 0.0;
             field = fieldOf(shape, screenUV(uv, u), u.misc.x, u.tune.x, u.misc.z, u.shp[0], u.shp[1], kt);

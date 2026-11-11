@@ -299,6 +299,7 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         retrace(cb, u)
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rp) else { return false }
         var u = u
+        if particles.density != nil { u.shp.1.w = particles.pxPerUnit }
         enc.setRenderPipelineState(pipeline)
         enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
         enc.setFragmentTexture(photo, index: 0)

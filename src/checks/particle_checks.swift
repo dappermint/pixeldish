@@ -16,6 +16,38 @@ func particleChecks(_ r: DishRenderer) -> [(String, Bool)] {
         out.append(("\(name) moves as the clock runs", moved != nil && moved != a))
     }
 
+    // the same exposure on a small and a large display, a star at the centre of the
+    // view, and sparse grains that read as haze instead of speckle
+    for shape in kParticleShapes {
+        func raw(_ w: Int, _ h: Int) -> [UInt8] {
+            var u = comboUniforms(shape, 0, w: w, h: h)
+            u.look.z = 1
+            u.tune = SIMD4(0.5, 1, 0, 0)
+            u.misc.w = 0
+            u.setPalette(kPalettes[mono].1, colors: 5)
+            return r.render(u, w: w, h: h) ?? []
+        }
+        let name = shapeName(shape).lowercased(), w = 1_600, h = 1_000
+        let small = raw(w / 4, h / 4), big = raw(w, h)
+        guard !small.isEmpty, !big.isEmpty else {
+            out.append(("\(name) renders at two sizes", false))
+            continue
+        }
+        let black = Int(kPalettes[mono].1[0].x * 255)
+        let gain = Double(redStats(big).mean - black) / Double(max(redStats(small).mean - black, 1))
+        out.append((
+            "\(name) exposure holds across display sizes (x\(String(format: "%.2f", gain)))",
+            gain > 0.6 && gain < 1.5
+        ))
+        out.append(("\(name) star sits at the view centre", big[((h / 2) * w + w / 2) * 4] > 200))
+        var jump = 0, lit = 0
+        for i in stride(from: 4, to: big.count, by: 4) where big[i] > 22 && i % (w * 4) != 0 {
+            jump += abs(Int(big[i]) - Int(big[i - 4]))
+            lit += 1
+        }
+        out.append(("\(name) sparse grains read as haze (step \(jump / max(lit, 1)))", lit > 0 && jump / lit < 8))
+    }
+
     // grains trapped in the pressure bumps: face on, the annular profile has to
     // swing harder with the rings knob up than with it off
     func ringSwing(_ rings: Double) -> Double {

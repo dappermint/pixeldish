@@ -3,6 +3,7 @@ import simd
 
 struct ParticleUniforms {
     var viewProj = matrix_identity_float4x4
+    var eye: SIMD4<Float> = .zero
     var time: Float = 0, dt: Float = 0, gain: Float = 0, pointSize: Float = 0
     var shp0: SIMD4<Float> = .zero, shp1: SIMD4<Float> = .zero
     var shape: UInt32 = 0, frame: UInt32 = 0, steps: UInt32 = 0, reset: UInt32 = 0
@@ -20,6 +21,8 @@ final class ParticleDrawer {
     var key: [Float] = []
     var simT: Float = 0
     var frame: UInt32 = 0
+    // screen pixels per world unit at the origin, where fmain draws the star
+    var pxPerUnit: Float = 0
 
     init?(dev: MTLDevice, lib: MTLLibrary) {
         guard let kf = lib.makeFunction(name: "particlesSim"),
@@ -55,9 +58,14 @@ final class ParticleDrawer {
         pu.shp0 = u.shp.0
         pu.shp1 = u.shp.1
         pu.shape = isDisk ? 0 : 1
-        pu.viewProj = Self.camera(u, aspect: Float(w) / Float(max(h, 1)), isDisk: isDisk)
-        pu.gain = (isDisk ? 0.03 : 0.025) / u.shp.1.x
-        pu.pointSize = Float(h) * 0.012
+        let cam = Self.camera(u, aspect: Float(w) / Float(max(h, 1)), isDisk: isDisk)
+        pu.viewProj = cam.viewProj
+        pu.eye = SIMD4(cam.eye, 0)
+        pxPerUnit = cam.unit * Float(h) / 2
+        // sprites keep their size in pixels and every particle deposits the same total,
+        // so the exposure and the grain per pixel are the same on any display
+        pu.gain = (isDisk ? 0.6 : 0.45) / u.shp.1.x
+        pu.pointSize = 20
 
         // the other knobs act on the running sim, so dragging one reshapes it live
         let newKey = [u.look.x, u.misc.x, Float(count)]
@@ -94,6 +102,10 @@ final class ParticleDrawer {
         enc.setVertexBytes(&pu, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
         enc.drawPrimitives(type: .point, vertexStart: 0, vertexCount: count)
         enc.endEncoding()
+        if let d = density, let blit = cb.makeBlitCommandEncoder() {
+            blit.generateMipmaps(for: d)
+            blit.endEncoding()
+        }
     }
 
     private func dispatch(_ cb: MTLCommandBuffer, _ pu: inout ParticleUniforms, _ count: Int, seed: Float) {
@@ -119,7 +131,7 @@ final class ParticleDrawer {
                 pixelFormat: .r16Float,
                 width: w,
                 height: h,
-                mipmapped: false
+                mipmapped: true
             )
             td.usage = [.renderTarget, .shaderRead]
             td.storageMode = .private
@@ -131,7 +143,9 @@ final class ParticleDrawer {
 
     // inclination is the tilt of the view off the disk's axis or the star's spin axis;
     // the seed picks the azimuth the camera sits at
-    private static func camera(_ u: Uniforms, aspect: Float, isDisk: Bool) -> simd_float4x4 {
+    private static func camera(
+        _ u: Uniforms, aspect: Float, isDisk: Bool
+    ) -> (viewProj: simd_float4x4, eye: SIMD3<Float>, unit: Float) {
         let inc = u.shp.0.x * .pi / 180, yaw = (u.misc.x * 0.37).truncatingRemainder(dividingBy: 1) * 2 * .pi
         let dist: Float = 8
         let eye = dist * SIMD3(sin(inc) * sin(yaw), cos(inc), sin(inc) * cos(yaw))
@@ -146,6 +160,6 @@ final class ParticleDrawer {
         let proj = simd_float4x4(columns: (
             SIMD4(fx, 0, 0, 0), SIMD4(0, fy, 0, 0), SIMD4(0, 0, -0.01, -1), SIMD4(0, 0, 1, 0)
         ))
-        return proj * view
+        return (proj * view, eye, fy / dist)
     }
 }
