@@ -43,7 +43,7 @@ func particleChecks(_ r: DishRenderer) -> [(String, Bool)] {
         out.append(("\(name) sparse grains read as haze (step \(jump / max(lit, 1)))", lit > 0 && jump / lit < 8))
     }
 
-    return out + diskGravityChecks(r) + diskDustChecks() + diskStructureChecks()
+    return out + diskGravityChecks(r) + diskFlowChecks(r) + diskDustChecks() + diskStructureChecks()
 }
 
 // mono palette, no dither, grain or vignette: the red channel is the field
@@ -126,6 +126,46 @@ private func diskGravityChecks(_ r: DishRenderer) -> [(String, Bool)] {
 
 private func at0(_ cx: Int, _ cy: Int, _ dx: Float) -> SIMD2<Float> {
     SIMD2((Float(cx) + 0.5) * dx - 3.6, (Float(cy) + 0.5) * dx - 3.6)
+}
+
+// a ring of grains on circular orbits: the mean flow the field hands back on the ring has to be
+// the ring's own, or the cooling that relaxes every grain toward it makes or loses angular
+// momentum. averaging velocities as vectors shortens them where the ring curves
+private func diskFlowChecks(_ r: DishRenderer) -> [(String, Bool)] {
+    let d = r.particles, n = 256, count = 4_096, ring: Float = 0.5
+    d.clear()
+    defer { d.clear() }
+    guard d.ensure(count: count, w: 16, h: 16, isDisk: true), let field = d.field,
+          let buf = r.device.makeBuffer(length: count * 32, options: .storageModeShared),
+          let cb = r.queue.makeCommandBuffer()
+    else { return [("disk flow renders", false)] }
+    let ps = buf.contents().bindMemory(to: SIMD4<Float>.self, capacity: count * 2)
+    for i in 0 ..< count {
+        let a = Float(i) / Float(count) * 2 * .pi, v = 1 / ring.squareRoot()
+        ps[2 * i] = SIMD4(ring * cos(a), 0, ring * sin(a), 0)
+        ps[2 * i + 1] = SIMD4(-v * sin(a), 0, v * cos(a), 0)
+    }
+    d.particles = buf
+    var pu = ParticleUniforms()
+    pu.deposit = 1 / Float(count)
+    d.fieldPasses(cb, &pu, count)
+    cb.commit()
+    cb.waitUntilCompleted()
+    var px = [Float16](repeating: 0, count: n * n * 4)
+    field.getBytes(&px, bytesPerRow: n * 8, from: MTLRegionMake2D(0, 0, n, n), mipmapLevel: 0)
+    var worst: Float = 0
+    for y in 0 ..< n {
+        for x in 0 ..< n {
+            let at = at0(x, y, 7.2 / Float(n))
+            guard abs(length(at) - ring) < 0.01 else { continue }
+            let vr = Float(px[(y * n + x) * 4 + 2]), j = Float(px[(y * n + x) * 4 + 3])
+            worst = max(worst, abs(vr), abs(j / ring.squareRoot() - 1))
+        }
+    }
+    return [(
+        "the gas's mean flow on a circular ring is the ring's own (off by \(String(format: "%.4f", worst)))",
+        worst < 0.003
+    )]
 }
 
 // dust feels the gas as a headwind, because pressure holds the gas up and not the dust, so it

@@ -401,7 +401,12 @@ vertex DepositOut diskDepositVert(uint vid [[vertex_id]], device const Particle 
                                   constant ParticleUniforms &u [[buffer(1)]]) {
     Particle P = ps[vid];
     float4 at = diskIsDust(vid, u.shp1.y) ? float4(2.0, 2.0, 2.0, 1.0) : float4(P.pos.x / kDiskL, -P.pos.z / kDiskL, 0.0, 1.0);
-    return { at, 1.0, float3(1.0, P.vel.xz), P.pos.xz };
+    // the flow is deposited in polar form, so averaging it over a cell neither turns it nor
+    // shortens it as the disk curves, and the cooling below moves angular momentum
+    // between grains without making or losing any
+    float2 x = P.pos.xz;
+    float r = max(length(x), 1e-3);
+    return { at, 1.0, float3(1.0, dot(x, P.vel.xz) / r, x.x * P.vel.z - x.y * P.vel.x), x };
 }
 
 fragment DepositFrag diskDepositFrag(DepositOut in [[stage_in]]) {
@@ -443,7 +448,7 @@ static inline float diskLnSigma(texture2d<float> grid, float2 uv, float norm) {
     return log(max(grid.sample(lin, uv, level(2.0)).x * norm, 0.0075));
 }
 
-// a.xy = the disk's gravity, a.zw = the mean gas velocity, p.xy = the gas pressure force
+// a.xy = the disk's gravity, a.zw = the gas's mean radial speed and angular momentum, p.xy = the gas pressure force
 struct FieldOut { float4 a [[color(0)]]; float4 p [[color(1)]]; };
 
 fragment FieldOut diskField(float4 pos [[position]], constant ParticleUniforms &u [[buffer(0)]],
@@ -555,12 +560,10 @@ kernel void diskSim(device Particle *ps [[buffer(0)]], constant ParticleUniforms
     // same flow in its stopping time, which grows as the grain does
     float stokes = 0.03 + P.pos.w * P.pos.w * min(P.vel.w / 30.0, 1.0);
     float rate = om / (dust ? stokes : max(u.shp0.w, 0.1));
-    // the grid's velocities are a step old and the flow has turned since. dragging toward
-    // the stale direction pushes every grain outward, faster than the dust drifts in
-    float turn = (x.x * f.w - x.y * f.z) / (r * r) * u.dt;
-    float2 flow = float2(f.z * cos(turn) - f.w * sin(turn), f.z * sin(turn) + f.w * cos(turn));
-    float2 v = P.vel.xz + acc * u.dt;
-    v += (flow - v) * (1.0 - exp(-u.dt * rate));
+    // relax toward the flow before the kick: the field was deposited from the pre-kick velocities
+    float2 flow = (f.z * x + f.w * float2(-x.y, x.x) / r) / r;
+    float2 v = P.vel.xz + (flow - P.vel.xz) * (1.0 - exp(-u.dt * rate));
+    v += acc * u.dt;
     // vertically the star and the planets pull the grain to the midplane, the drag damps
     // it and stirring keeps the gas about 0.03 r thick, the dust thinner.
     // ponytail: the disk's own gravity is in-plane only, so a clump that forms away
