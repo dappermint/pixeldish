@@ -205,6 +205,16 @@ static float giantCorona(float2 n, float height, float radius, float2 vent, floa
     return corona;
 }
 
+// Four bilinear taps reconstruct a quadratic B-spline across cell boundaries.
+// Pixel coordinates include the half-texel offset to the cell centre.
+static float4 windSample(texture2d<float> tex, float2 pixel) {
+    constexpr sampler smp(coord::pixel, filter::linear, address::clamp_to_edge);
+    float2 f = fract(pixel), center = floor(pixel) + 0.5;
+    float2 lo = center - (1.0 - f) * (1.0 - f), hi = center + f * f;
+    return 0.25 * (tex.sample(smp, lo) + tex.sample(smp, float2(hi.x, lo.y))
+                 + tex.sample(smp, float2(lo.x, hi.y)) + tex.sample(smp, hi));
+}
+
 static float wakeField(texture2d<float> plasma, texture2d<float> filaments, float2 pos, constant Uniforms &u) {
     constexpr sampler smp(filter::linear, address::clamp_to_edge);
     float2 res = u.view.xy;
@@ -226,12 +236,12 @@ static float wakeField(texture2d<float> plasma, texture2d<float> filaments, floa
         return saturate(giantPhotosphere(delta / giant.z, t, seed) + limb);
     }
 
-    float2 uv = (p + 0.5) / size;
-    float4 s = plasma.sample(smp, uv);
-    float2 tracer = filaments.sample(smp, uv).xy;
+    float2 pixel = p + 0.5;
+    float4 s = windSample(plasma, pixel);
+    float2 tracer = windSample(filaments, 2.0 * pixel).xy;
     float rho = max(s.x, 0.001), threads = sqrt(saturate(tracer.x));
-    float gx = plasma.sample(smp, uv, int2(1, 0)).x - plasma.sample(smp, uv, int2(-1, 0)).x;
-    float gy = plasma.sample(smp, uv, int2(0, 1)).x - plasma.sample(smp, uv, int2(0, -1)).x;
+    float gx = windSample(plasma, pixel + float2(1, 0)).x - windSample(plasma, pixel - float2(1, 0)).x;
+    float gy = windSample(plasma, pixel + float2(0, 1)).x - windSample(plasma, pixel - float2(0, 1)).x;
     float shock = length(float2(gx, gy)) / sqrt(rho);
     float light = (0.11 + 0.40 * threads) * rho * rho + 1.65 * shock + 0.3 * s.w;
     float gas = (0.72 + 0.28 * threads) * (1.0 - exp(-0.64 * log2(1.0 + light)));
