@@ -1,0 +1,43 @@
+name: Update Homebrew cask
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      HOMEBREW_TAP_DEPLOY_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pixeldish-homebrew
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: dappermint/homebrew-tap
+          ref: main
+          path: tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      - name: Verify the release and update the cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/update-homebrew.py tap/Casks/pixeldish.rb
+      - name: Publish the cask if it changed
+        working-directory: tap
+        run: |
+          if git diff --quiet -- Casks/pixeldish.rb; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- Casks/pixeldish.rb
+          git commit -m "chore: update Pixeldish to the latest release"
+          git pull --rebase origin main
+          git push origin HEAD:main

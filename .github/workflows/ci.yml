@@ -30,3 +30,12 @@ jobs:
           version=$(nix develop -c just --evaluate VERSION)
           [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "tag $GITHUB_REF_NAME does not match VERSION $version"; exit 1; }
           gh release create "$GITHUB_REF_NAME" "build/Pixeldish-$version.dmg" --verify-tag --generate-notes
+
+  homebrew:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/homebrew.yml
+    permissions:
+      contents: read
+    secrets:
+      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
