@@ -22,16 +22,15 @@ struct EditorView: View {
     @AppStorage("hyper") var hyper = false
     @AppStorage("fps") var fps = 60.0
     @AppStorage("autoShuffle") var autoShuffle = false
+    @AppStorage("shuffleSavedOnly") var shuffleSavedOnly = false
     @AppStorage("isPhoto") var isPhoto = false
     @AppStorage("launchAtLogin") var launchAtLogin = false
     @AppStorage("seed") var seed = 0.0
-    @AppStorage("saved") var savedData = Data()
     @AppStorage("patternID") var patternID = ""
     var onShuffle: () -> Void
     var onReseed: () -> Void
     var onSave: () -> Void
-    var onLoad: (Int) -> Void
-    var onDelete: (Int) -> Void
+    var onGallery: () -> Void
     var onPrevious: () -> Void
     var onCopy: () -> Void
     var onPaste: () -> Void
@@ -43,6 +42,7 @@ struct EditorView: View {
     var body: some View {
         Form {
             Section {
+                Button("Open gallery…", action: onGallery)
                 Picker("Shape", selection: $shape) {
                     ForEach(0 ..< kShapeNames.count, id: \.self) { Text(kShapeNames[$0]).tag($0) }
                 }
@@ -100,6 +100,11 @@ struct EditorView: View {
                 Toggle("Hyper", isOn: $hyper)
                     .help("demo mode: draw at the display's top refresh rate, 120 Hz on ProMotion")
                 Toggle("Shuffle every hour", isOn: $autoShuffle)
+                Picker("Shuffle source", selection: $shuffleSavedOnly) {
+                    Text("Generated patterns").tag(false)
+                    Text("Saved looks").tag(true)
+                }
+                .help("Used by Shuffle and hourly shuffle. Save a look in the gallery to include it.")
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
                         try? (on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister())
@@ -111,6 +116,7 @@ struct EditorView: View {
                     Button("Shuffle", action: onShuffle)
                     Button("Reseed", action: onReseed)
                     Button("Previous", action: onPrevious)
+                    Button("Save look", action: onSave)
                 }
                 LabeledContent("Seed", value: String(format: "%.3f", seed))
                     .monospacedDigit().textSelection(.enabled)
@@ -128,32 +134,6 @@ struct EditorView: View {
                 }
                 if isPhoto {
                     Button("Back to generators") { isPhoto = false }
-                }
-            }
-
-            Section {
-                if savedLooks(savedData).isEmpty {
-                    Text("No saved looks yet").foregroundStyle(.secondary)
-                }
-                ForEach(Array(savedLooks(savedData).enumerated()), id: \.offset) { i, look in
-                    HStack {
-                        Button(look["name"] as? String ?? "look \(i + 1)") { onLoad(i) }
-                            .buttonStyle(.link).help(look["id"] as? String ?? "")
-                        Spacer()
-                        Button {
-                            onDelete(i)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Delete saved look")
-                    }
-                }
-            } header: {
-                HStack {
-                    Text("Saved")
-                    Spacer()
-                    Button("Save look", action: onSave)
                 }
             }
         }

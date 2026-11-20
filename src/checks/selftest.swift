@@ -47,7 +47,7 @@ func runSelftest() -> Bool {
             check(name, ok)
         }
     }
-    for (name, ok) in configChecks() {
+    for (name, ok) in configChecks() + galleryChecks() {
         check(name, ok)
     }
     check("dither names", kDitherNames.count == 13)
@@ -263,6 +263,24 @@ func configChecks() -> [(String, Bool)] {
         legacy["shape"] as? String == "Kerr" && legacy["palette"] as? String == "Nord"
     ))
     out.append(("pattern clamps out of range", legacy["warp"] as? Double == 1))
+
+    let gallery = GalleryLook([
+        "shape": 16,
+        "palette": "Custom",
+        "colors": 3,
+        "invert": true,
+        "custom": ["#FFFFFF", "#555555", "#000000", "#CCCCCC", "#888888"],
+        "params": ["spin": 0.41, "inclination": 72]
+    ])
+    let preview = gallery.thumbnailUniforms()
+    out.append((
+        "gallery previews saved custom colours in luminance order",
+        preview.pal.0.x == 0 && abs(preview.pal.1.x - 136.0 / 255.0) < 0.001 && preview.pal.2.x == 1
+    ))
+    out.append((
+        "gallery previews legacy shapes with saved controls",
+        preview.look.x == 16 && preview.misc.y == 1 && preview.shp.0.x == 0.41 && preview.shp.0.y == 72
+    ))
 
     let id = patternID(kerr)
     var renamed = kerr, reseeded = kerr

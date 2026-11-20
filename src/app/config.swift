@@ -113,7 +113,7 @@ func applyPattern(_ raw: [String: Any]) {
 // settings and pattern apply at launch and whenever a rebuild changes it, its
 // saved patterns are listed but never written back
 enum Config {
-    static let settingKeys = ["animate", "hyper", "autoShuffle"]
+    static let settingKeys = ["animate", "hyper", "autoShuffle", "shuffleSavedOnly"]
     static var userURL: URL {
         let env = ProcessInfo.processInfo.environment
         let base = env["XDG_CONFIG_HOME"].map { URL(fileURLWithPath: $0) }

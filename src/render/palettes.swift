@@ -204,9 +204,14 @@ enum PhotoPalette {
 
     // the editor's wells can be filled in any order; every dither assumes a
     // dark-to-light ramp, so the rendered palette is sorted by luminance
-    static func apply() {
+    static func sorted(_ palette: [SIMD3<Float>]) -> [SIMD3<Float>] {
         let lum = { (c: SIMD3<Float>) in 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z }
-        guard let pal = stored()?.sorted(by: { lum($0) < lum($1) }) else { return }
+        return palette.sorted { lum($0) < lum($1) }
+    }
+
+    static func apply() {
+        guard let raw = stored() else { return }
+        let pal = sorted(raw)
         if kPalettes.last?.0 == "Custom" {
             kPalettes[kPalettes.count - 1] = ("Custom", pal)
         } else {

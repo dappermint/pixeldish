@@ -69,6 +69,7 @@ in
         default = null;
         description = "shuffle every hour";
       };
+      shuffleSavedOnly = opt types.bool "shuffle through saved looks before repeating";
     };
     pattern = mkOption {
       type = types.nullOr patternOrString;

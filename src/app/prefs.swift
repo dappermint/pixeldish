@@ -7,7 +7,7 @@ enum Pref {
         "warp": 0.5, "contrast": 1.0, "grain": 0.05, "vignette": 0.35,
         "speed": 0.35, "zoom": 1.0, "spread": 0.0, "animate": true,
         "invert": false, "launchAtLogin": false, "hyper": false,
-        "autoShuffle": false, "fps": 60.0
+        "autoShuffle": false, "shuffleSavedOnly": false, "fps": 60.0
     ].merging(
         kShapeNames.indices.flatMap { s in shapeParams(s).map { (paramKey(s, $0), $0.def as Any) } }
     ) { $1 }

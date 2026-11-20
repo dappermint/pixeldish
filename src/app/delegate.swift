@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let wall = WallpaperController()
     var status: NSStatusItem?
     var editor: NSWindow?
+    var gallery: NSWindow?
     var tick: Timer?
     var lastShuffle = Date()
     var history: [[String: Any]] = []
@@ -39,8 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if on != !wall.paused { wall.setPaused(!on) }
             ticks += 1
             wall.tick(live: live, hyper: Pref.d.bool(forKey: "hyper"), recount: ticks % 10 == 0)
-            // ponytail: fixed hour, counted from launch or the last shuffle; a picker if anyone wants daily
-            if Pref.d.bool(forKey: "autoShuffle"), Date().timeIntervalSince(lastShuffle) > 3_600 { shuffle() }
+            shuffleIfDue()
             // ponytail: polls both config files every 2s; a stat is cheaper than watching a symlink chain nix swaps
             if ticks % 40 == 0 { Config.poll() }
         }
@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         s.button?.image = steakIcon()
         let m = NSMenu()
+        m.addItem(withTitle: "Gallery", action: #selector(openGallery), keyEquivalent: "g")
         m.addItem(withTitle: "Editor", action: #selector(openEditor), keyEquivalent: "e")
         m.addItem(withTitle: "Shuffle", action: #selector(shuffle), keyEquivalent: "r")
         m.addItem(withTitle: "Previous", action: #selector(previous), keyEquivalent: "p")
@@ -102,6 +103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func shuffle() {
         lastShuffle = Date()
+        if Pref.d.bool(forKey: "shuffleSavedOnly") {
+            shuffleSavedLook()
+            return
+        }
         pushHistory()
         let d = Pref.d
         let shape = Int.random(in: 0 ..< kShapeNames.count)
@@ -124,14 +129,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wall.refresh()
     }
 
-    // ponytail: saved looks are a flat list with auto names, no thumbnails or
-    // rename (the config file takes a name); add a gallery if the list gets long
     @objc func saveLook() {
         var look = currentPattern()
-        let df = DateFormatter()
-        df.dateFormat = "MMM d HH:mm"
-        look["name"] = "\(look["shape"] ?? "?") / \(look["palette"] ?? "?") / \(df.string(from: Date()))"
-        storeLooks([look] + savedLooks().filter { $0["id"] as? String != look["id"] as? String })
+        let saved = savedLooks()
+        guard let id = look["id"] as? String, !Config.managedIDs.contains(id) else { return }
+        if let existing = saved.first(where: { $0["id"] as? String == id }) {
+            look = existing
+        } else {
+            let df = DateFormatter()
+            df.dateFormat = "MMM d HH:mm"
+            look["name"] = "\(look["shape"] ?? "?") / \(look["palette"] ?? "?") / \(df.string(from: Date()))"
+        }
+        storeLooks([look] + saved.filter { $0["id"] as? String != id })
+        Config.save()
     }
 
     // one line of KYAML: paste it into a chat, another Pixeldish, or nix-darwin
@@ -148,26 +158,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { NSSound.beep()
             return
         }
-        pushHistory()
-        applyPattern(p)
-        wall.reset()
-        wall.refresh()
+        selectLook(p)
     }
 
-    func loadSaved(_ i: Int) {
-        let s = savedLooks()
-        guard s.indices.contains(i) else { return }
+    func selectLook(_ pattern: [String: Any]) {
         pushHistory()
-        applyPattern(s[i])
+        applyPattern(pattern)
         wall.reset()
         wall.refresh()
+        Config.save()
     }
 
-    func deleteSaved(_ i: Int) {
-        var s = savedLooks()
-        guard s.indices.contains(i) else { return }
-        s.remove(at: i)
-        storeLooks(s)
+    func deleteSaved(_ id: String) {
+        guard !Config.managedIDs.contains(id) else { return }
+        storeLooks(savedLooks().filter { $0["id"] as? String != id })
+        Config.save()
+    }
+
+    func renameSaved(_ id: String, to name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var saved = savedLooks()
+        guard !name.isEmpty, !Config.managedIDs.contains(id),
+              let index = saved.firstIndex(where: { $0["id"] as? String == id })
+        else { return }
+        saved[index]["name"] = name
+        storeLooks(saved)
+        Config.save()
     }
 
     @objc func previous() {
@@ -187,8 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onShuffle: { [weak self] in self?.shuffle() },
             onReseed: { [weak self] in self?.reseed() },
             onSave: { [weak self] in self?.saveLook() },
-            onLoad: { [weak self] in self?.loadSaved($0) },
-            onDelete: { [weak self] in self?.deleteSaved($0) },
+            onGallery: { [weak self] in self?.openGallery() },
             onPrevious: { [weak self] in self?.previous() },
             onCopy: { [weak self] in self?.copyPattern() },
             onPaste: { [weak self] in self?.pastePattern() },

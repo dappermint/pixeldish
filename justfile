@@ -1,6 +1,6 @@
 APP_NAME := "Pixeldish"
 BUNDLE   := "lgbt.dappy.pixeldish"
-VERSION  := "0.9.1"
+VERSION  := "0.9.5"
 APP      := "build/Pixeldish.app"
 BIN      := APP / "Contents/MacOS/Pixeldish"
 SWIFTC   := "/usr/bin/xcrun swiftc"

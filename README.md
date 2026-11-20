@@ -57,21 +57,22 @@ in Swift and Metal. It has no dock icon and no dependencies.
   build it from a photo
 - stops drawing when a display is fully covered, holds the frame in Low Power
   Mode
-- shuffle every hour
+- shuffle generated patterns or rotate through saved looks, manually or every hour
 - hyper: demo mode that draws at the display's top refresh rate (120 Hz on
   ProMotion); pipes, protodisk, magnetar and wake default to 60 fps (frame rate
   slider, 15 to 120) and drop as windows cover more of the display
 - live animated desktop layer on every display, or a still frame
 - use a photo as the source image
 - export a PNG for each display
-- saved looks, history, launch at login
+- preset gallery with six starter looks and thumbnails of your saved patterns
+- rename saved looks, step back through history, or launch at login
 - keeps the system wallpaper in step: Mission Control, the lock screen and the
   desktop after quitting show a still of the current look
 - screen saver: the app installs Pixeldish.saver into `~/Library/Screen Savers`
   on launch; pick it in System Settings > Screen Saver to get the current look
   when idle and on lock
 
-Each shuffle or reseed takes a new seed from the clock. The seed changes more
+Each generated shuffle or reseed takes a new seed from the clock. The seed changes more
 than the noise offset: it also picks scale, spiral direction and drift.
 
 ## Install
@@ -98,6 +99,7 @@ Click the grid icon in the menu bar:
 
 | item | key |
 |---|---|
+| Gallery | ⌘G |
 | Editor | ⌘E |
 | Shuffle | ⌘R |
 | Previous | ⌘P |
@@ -108,7 +110,18 @@ Click the grid icon in the menu bar:
 
 The editor has every knob: shape, dither, palette, colour count, pixel size,
 warp, contrast, grain, vignette, zoom, spread, speed, invert, animate, hyper
-and hourly shuffle.
+and hourly shuffle. Under **Behaviour → Shuffle source**, choose **Saved looks**
+to rotate through the gallery's saved patterns, including Nix-managed ones.
+Each saved look gets a turn before the cycle starts over, even across app
+restarts. An empty collection leaves the wallpaper as it is.
+
+Open **Gallery** from the menu bar or editor. Click a thumbnail to apply its
+pattern. **Save current look** adds your settings to Saved. Use the menu beside
+a saved look to rename or delete it. Choose **Variations…** from any preset
+or saved look's menu to compare four palettes or four dithers on the same frame.
+The first thumbnail is the original. Click a thumbnail to apply it, or cancel
+to keep the current wallpaper. Looks supplied by Nix can be edited in your
+configuration.
 
 ## Patterns and config
 
