@@ -707,6 +707,8 @@ static float particleField(texture2d<float> dens, float2 uv, float2 res, bool ma
     return saturate(log2(1.0 + 8.0 * d) / log2(1.0 + 8.0 * 12.0));
 }
 
+#include "wake.metal"
+
 // ---------------------------------------------------------------- shapes
 
 // value noise with a quintic fade: continuous curvature, so a mirror shows no seams
@@ -1345,7 +1347,8 @@ fragment float4 fmain(float4 pos [[position]],
                       constant Uniforms &u [[buffer(0)]],
                       texture2d<float> photo [[texture(0)]],
                       texture2d<float> atlas [[texture(1)]],
-                      texture2d<float> trace [[texture(2)]])
+                      texture2d<float> trace [[texture(2)]],
+                      texture2d<float> filaments [[texture(3)]])
 {
     constexpr sampler smp(filter::linear, address::clamp_to_edge);
     float2 res = u.view.xy;
@@ -1361,6 +1364,8 @@ fragment float4 fmain(float4 pos [[position]],
             float2 pt = trace.read(uint2(uv)).xy;
             field = pt.x;
             pipeMat = int(pt.y + 0.5);
+        } else if (shape == 33) {
+            field = wakeField(trace, filaments, uv, u);
         } else if (shape == 31 || shape == 32) {
             field = particleField(trace, uv, res, shape == 32, u.shp[1].w);
         } else {

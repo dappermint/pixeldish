@@ -9,14 +9,15 @@ in Swift and Metal. It has no dock icon and no dependencies.
   <img src="assets/pipes.gif" width="32%" alt="Pipes shape, Bayer 8 dither, Van Helsing palette, animated">
   <img src="assets/protodisk.gif" width="32%" alt="Protodisk shape, Bayer 8 dither, Ember palette, animated">
   <img src="assets/magnetar.gif" width="32%" alt="Magnetar shape, Bayer 8 dither, Mocha palette, animated">
+  <img src="assets/wake.gif" width="32%" alt="Wake in Ember and Bayer 8: a hypergiant sends a ribbon of plasma past a protostar">
 </p>
 
 ## Features
 
-- 33 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
+- 34 shape generators: drift, shepard, sines, fringe, curtain, voronoi, contour,
   vortex, sweep, glitch, twill, belts, circuit, julia, kali, torus, kerr, binary,
   cygnus, pipes, drape, mercury, tyndall, corona, streamer, borealis, pulsar,
-  limelight, shutter, limb, luxfer, protodisk, magnetar
+  limelight, shutter, limb, luxfer, protodisk, magnetar, wake
 - kerr ray traces a Kerr null geodesic per pixel onto a Page-Thorne disk with
   g^4 beaming; the selftest checks the shadow against Bardeen's analytic edge.
   binary superposes two Schwarzschild lenses, cygnus is a hole fed by a
@@ -30,6 +31,11 @@ in Swift and Metal. It has no dock icon and no dependencies.
   plasma along the loops of a tilted, spinning dipole and periodically blows the
   flaring loops open. The particle count follows the pixel count, so the density
   knob costs the same on any display
+- in wake, a hypergiant fills one side of the desktop. A prominence rises above
+  its mottled surface and a stream of plasma blows past a much smaller protostar.
+  The wind leaves the visible stellar surface and the companion’s gravity bends
+  it into a wake. The editor exposes wind speed and gravity, with viscosity,
+  companion jets and frame rate under Advanced.
 - per-shape knobs: torus size, thickness, tumble, chase and windings; kerr spin
   (0 is Schwarzschild), inclination, mass, disk temperature and radius; binary
   mass ratio, separation, inclination, orbit speed, disk temperature; cygnus
@@ -53,7 +59,7 @@ in Swift and Metal. It has no dock icon and no dependencies.
   Mode
 - shuffle every hour
 - hyper: demo mode that draws at the display's top refresh rate (120 Hz on
-  ProMotion); pipes, protodisk and magnetar default to 60 fps (frame rate
+  ProMotion); pipes, protodisk, magnetar and wake default to 60 fps (frame rate
   slider, 15 to 120) and drop as windows cover more of the display
 - live animated desktop layer on every display, or a still frame
 - use a photo as the source image

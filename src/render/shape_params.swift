@@ -1,5 +1,6 @@
 struct ShapeParam {
     let key: String, label: String, range: ClosedRange<Double>, def: Double
+    var advanced = false
 }
 
 // knobs one shape has beyond the shared ones, packed into Uniforms.shp in this
@@ -54,6 +55,12 @@ let kShapeParams: [String: [ShapeParam]] = [
         ShapeParam(key: "loops", label: "Loops", range: 8 ... 160, def: 48),
         ShapeParam(key: "flare", label: "Flare period", range: 3 ... 20, def: 7),
         ShapeParam(key: "density", label: "Particle density", range: 0.01 ... 0.3, def: 0.2)
+    ],
+    "Wake": [
+        ShapeParam(key: "current", label: "Wind speed", range: 0.75 ... 1.2, def: 1),
+        ShapeParam(key: "viscosity", label: "Viscosity", range: 0.75 ... 3, def: 1, advanced: true),
+        ShapeParam(key: "gravity", label: "Gravity", range: 0 ... 2, def: 1.5),
+        ShapeParam(key: "outflow", label: "Companion jets", range: 0 ... 2, def: 0, advanced: true)
     ]
 ]
 

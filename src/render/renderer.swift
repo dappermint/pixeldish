@@ -9,7 +9,7 @@ let kShapeNames = [
     "Contour", "Vortex", "Sweep", "Glitch", "Twill", "Belts", "Circuit",
     "Julia", "Kali", "Torus", "Kerr", "Binary", "Cygnus", "Pipes",
     "Drape", "Mercury", "Tyndall", "Corona", "Streamer", "Borealis",
-    "Pulsar", "Limelight", "Shutter", "Limb", "Luxfer", "Protodisk", "Magnetar"
+    "Pulsar", "Limelight", "Shutter", "Limb", "Luxfer", "Protodisk", "Magnetar", "Wake"
 ]
 let kDitherNames = [
     "Smooth", "Poster", "Bayer 4", "Bayer 8", "Noise",
@@ -17,13 +17,15 @@ let kDitherNames = [
     "Bayer 2", "Bayer 16", "R2"
 ]
 
-// pipes and the particle shapes follow the fps slider, scaled by the share of the display windows leave
+let kFrameRateShapes = Set(kParticleShapes + ["Pipes", "Wake"].compactMap { kShapeNames.firstIndex(of: $0) })
+
+// stateful shapes follow the fps slider, scaled by the share of the display windows leave
 // visible; the per-pixel shapes stay on the 20 Hz timer and hyper overrides both
 func targetFPS(
     shape: Int, isPhoto: Bool, hyper: Bool, fps: Double = 60, visible: Double = 1, maxFPS: Int = 120
 ) -> Int {
     if hyper { return maxFPS }
-    guard !isPhoto, shape == kShapeNames.firstIndex(of: "Pipes") || kParticleShapes.contains(shape) else { return 20 }
+    guard !isPhoto, kFrameRateShapes.contains(shape) else { return 20 }
     let f = min(max(fps, 15), Double(maxFPS)) * min(max(visible, 0), 1)
     return max(10, Int((f / 5).rounded()) * 5)
 }
@@ -132,6 +134,7 @@ final class DishRenderer: NSObject, MTKViewDelegate {
     let pipeline: MTLRenderPipelineState
     let tracer: MTLRenderPipelineState
     let pipes: PipeDrawer
+    let wake: WakeDrawer
     let particles: ParticleDrawer
     var atlas: MTLTexture?
     var photo: MTLTexture?
@@ -171,11 +174,13 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         pd.colorAttachments[0].pixelFormat = .rg32Float
         guard let t = try? dev.makeRenderPipelineState(descriptor: pd),
               let pw = PipeDrawer(dev: dev, lib: lib),
-              let pa = ParticleDrawer(dev: dev, lib: lib)
+              let pa = ParticleDrawer(dev: dev, lib: lib),
+              let wake = WakeDrawer(device: dev, library: lib)
         else { return nil }
         pipeline = p
         tracer = t
         pipes = pw
+        self.wake = wake
         particles = pa
         super.init()
         atlas = makeRampAtlas(dev)
@@ -196,6 +201,15 @@ final class DishRenderer: NSObject, MTKViewDelegate {
 
     func retrace(_ cb: MTLCommandBuffer, _ u: Uniforms) {
         let shape = Int(u.look.x)
+        if shape == kShapeNames.firstIndex(of: "Wake"), u.view.w < 0.5 {
+            trace = nil
+            traceKey = []
+            particles.clear()
+            pipes.clear()
+            wake.encode(cb, u)
+            return
+        }
+        wake.clear()
         if kParticleShapes.contains(shape), u.view.w < 0.5 {
             trace = nil
             traceKey = []
@@ -239,11 +253,13 @@ final class DishRenderer: NSObject, MTKViewDelegate {
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rp) else { return false }
         var u = u
         if particles.density != nil { u.shp.1.w = particles.pxPerUnit }
+        if wake.plasma != nil { u.shp.1.w = wake.time }
         enc.setRenderPipelineState(pipeline)
         enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
         enc.setFragmentTexture(photo, index: 0)
         enc.setFragmentTexture(atlas, index: 1)
-        enc.setFragmentTexture(particles.density ?? trace, index: 2)
+        enc.setFragmentTexture(wake.plasma ?? particles.density ?? trace, index: 2)
+        enc.setFragmentTexture(wake.filaments, index: 3)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
         return true

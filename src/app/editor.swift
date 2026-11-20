@@ -63,14 +63,18 @@ struct EditorView: View {
                 Button("Palette from photo...", action: onPalettePhoto)
             }
 
-            if !shapeParams(shape).isEmpty {
+            let params = shapeParams(shape)
+            if !params.isEmpty {
                 Section(shapeName(shape)) {
-                    ForEach(shapeParams(shape), id: \.key) { p in
-                        ParamSlider(param: p, key: paramKey(shape, p)).id(paramKey(shape, p))
-                    }
-                    if shapeName(shape) == "Pipes" || kParticleShapes.contains(shape) {
-                        slider("Frame rate", $fps, "fps", format: "%.0f")
-                            .help("drops with how much of the display windows cover; hyper ignores it")
+                    parameterSliders(params.filter { !$0.advanced })
+                    let advanced = params.filter(\.advanced)
+                    if advanced.isEmpty {
+                        frameRateControl
+                    } else {
+                        DisclosureGroup("Advanced") {
+                            parameterSliders(advanced)
+                            frameRateControl
+                        }
                     }
                 }
             }
@@ -155,6 +159,19 @@ struct EditorView: View {
         }
         .formStyle(.grouped)
         .frame(width: 440, height: 760)
+    }
+
+    private func parameterSliders(_ params: [ShapeParam]) -> some View {
+        ForEach(params, id: \.key) { p in
+            ParamSlider(param: p, key: paramKey(shape, p)).id(paramKey(shape, p))
+        }
+    }
+
+    @ViewBuilder private var frameRateControl: some View {
+        if kFrameRateShapes.contains(shape) {
+            slider("Frame rate", $fps, "fps", format: "%.0f")
+                .help("drops with how much of the display windows cover; hyper ignores it")
+        }
     }
 
     // ponytail: wells read UserDefaults directly, so a palette-from-photo made while
